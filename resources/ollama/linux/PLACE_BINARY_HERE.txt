@@ -1,0 +1,22 @@
+Portable Ollama for Linux goes in this folder.
+
+AUTOMATIC (recommended):  bash scripts/setup-linux.sh
+  Downloads the official bundle from GitHub and unpacks it here.
+
+MANUAL:
+  1. Download from https://github.com/ollama/ollama/releases/latest
+       ollama-linux-amd64.tar.zst   (x86_64)
+       ollama-linux-arm64.tar.zst   (ARM64)
+     (older releases used .tgz instead of .tar.zst)
+  2. Extract the WHOLE archive into this folder:
+       zstd -dc ollama-linux-amd64.tar.zst | tar -x -C resources/ollama/linux
+     You end up with:
+       resources/ollama/linux/bin/ollama
+       resources/ollama/linux/lib/ollama/...   <- GPU/CPU runner libraries
+  3. Create the launcher wrapper the app looks for, and make both executable:
+       printf '#!/bin/sh\nexec "$(dirname "$0")/bin/ollama" "$@"\n' > resources/ollama/linux/ollama
+       chmod +x resources/ollama/linux/ollama resources/ollama/linux/bin/ollama
+
+Without this folder populated, the app still works IF Ollama is installed
+system-wide (on PATH) - findBundledOllama() in src/main/main.js falls back to
+plain 'ollama' automatically.
