@@ -1,5 +1,5 @@
 const { app, BrowserWindow, ipcMain, clipboard, dialog, protocol, shell, screen } = require('electron');
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -175,6 +175,43 @@ let ollama, downloader, mobileServer, voiceInput, library;
 // to store them, not our portable folder, and we have no way to change it.
 let weSpawnedOllama = false;
 
+// PID of the Ollama server this app owns — either the one spawned this
+// session, or one spawned by a *previous* session that the user left
+// running via "keep models loaded" and that we re-adopted at startup (see
+// adoptKeptOllama). This, not the image name, is what shutdown kills, so an
+// unrelated Ollama (tray app, service, terminal) is never touched.
+let ownedOllamaPid = null;
+
+// Resolves true if `pid` is a live ollama process. Used to tell our own
+// kept-alive server from a previous session apart from a foreign instance.
+function isOllamaPid(pid) {
+  return new Promise((resolve) => {
+    if (!Number.isInteger(pid) || pid <= 0) return resolve(false);
+    if (process.platform !== 'win32') {
+      try { process.kill(pid, 0); resolve(true); } catch { resolve(false); }
+      return;
+    }
+    execFile('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], { windowsHide: true }, (err, stdout) => {
+      resolve(!err && /"ollama\.exe"/i.test(stdout || ''));
+    });
+  });
+}
+
+// When Ollama is already answering at startup, check whether it's the one we
+// left running on our last exit. If so, it's still ours to manage (folder
+// switches, shutdown); otherwise it's foreign and we leave it alone.
+async function adoptKeptOllama() {
+  const pid = hostSettings.keptOllamaPid;
+  if (!pid) return false;
+  delete hostSettings.keptOllamaPid;
+  saveHostSettings();
+  if (!(await isOllamaPid(pid))) return false;
+  ownedOllamaPid = pid;
+  weSpawnedOllama = true;
+  appendOllamaLog(`[AIPortable] Re-adopted Ollama (PID ${pid}) left running by the previous session — its earlier log output isn't available.\n`);
+  return true;
+}
+
 function ollamaReady() {
   return new Promise((resolve) => {
     const req = http.get({ hostname: OLLAMA_HOST, port: OLLAMA_PORT, path: '/api/tags', timeout: 1500 }, (res) => {
@@ -202,7 +239,12 @@ function appendOllamaLog(chunk) {
 }
 
 async function ensureOllamaRunning() {
-  if (await ollamaReady()) return true; // someone else is already serving — see weSpawnedOllama note above
+  if (await ollamaReady()) {
+    // Already serving — either our own instance kept from last session, or
+    // someone else's (see weSpawnedOllama note above).
+    await adoptKeptOllama();
+    return true;
+  }
   const bin = findBundledOllama() || 'ollama';
   const modelsDir = getEffectiveModelsDir();
   try {
@@ -230,7 +272,11 @@ async function ensureOllamaRunning() {
   }
   for (let i = 0; i < 20; i++) {
     await new Promise((r) => setTimeout(r, 400));
-    if (await ollamaReady()) { weSpawnedOllama = true; return true; }
+    if (await ollamaReady()) {
+      weSpawnedOllama = true;
+      ownedOllamaPid = ollamaProcess?.pid || null;
+      return true;
+    }
   }
   return false;
 }
@@ -246,19 +292,34 @@ async function restartManagedOllama(message) {
   if (!weSpawnedOllama) return { restarted: false, ready: await ollamaReady() };
   win?.webContents.send('ollama-restart-status', { message });
   await unloadRunningModels();
-  stopOllama();
-  weSpawnedOllama = false;
+  await stopOllama();
   await new Promise((r) => setTimeout(r, 400)); // let the OS release the port before we rebind it
   const ready = await ensureOllamaRunning();
   win?.webContents.send('ollama-status', { ready });
   return { restarted: true, ready };
 }
 
+// Kills only the Ollama server we own (spawned or re-adopted), by PID. On
+// Windows, `taskkill /T` takes down the whole tree — ollama.exe spawns each
+// loaded model as a child llama-server.exe runner, which a plain kill() of
+// ollama.exe would leave orphaned and still holding the model in memory.
+// Any other Ollama on the machine is deliberately left untouched.
 function stopOllama() {
-  if (ollamaProcess && !ollamaProcess.killed) {
-    ollamaProcess.kill();
-    ollamaProcess = null;
+  const pid = ownedOllamaPid;
+  ownedOllamaPid = null;
+  weSpawnedOllama = false;
+  const child = ollamaProcess;
+  ollamaProcess = null;
+  if (!pid) return Promise.resolve();
+  if (process.platform !== 'win32') {
+    try { process.kill(pid); } catch { /* already gone */ }
+    return Promise.resolve();
   }
+  return new Promise((resolve) => {
+    const done = () => { clearTimeout(timer); resolve(); };
+    const timer = setTimeout(done, 3000);
+    execFile('taskkill', ['/F', '/T', '/PID', String(pid)], { windowsHide: true }, done);
+  }).finally(() => { if (child && !child.killed) { try { child.kill(); } catch { /* already gone */ } } });
 }
 
 // Best-effort cleanup of anything we spawned, mirroring the reference app's
@@ -276,17 +337,13 @@ function killStragglers() {
   const targets =
     process.platform === 'win32'
       ? [
-          // ollama.exe spawns each loaded model as a separate llama-server.exe
-          // runner process. By the time this runs, stopOllama() has already
-          // killed ollama.exe itself, so `/IM ollama.exe` (even with /T) matches
-          // nothing and the runner(s) it orphaned are left holding the model in
-          // memory — they have to be targeted by their own image name instead.
-          ['taskkill', ['/F', '/T', '/IM', 'ollama.exe']],
-          ['taskkill', ['/F', '/T', '/IM', 'llama-server.exe']],
+          // No ollama.exe / llama-server.exe here: those image names are
+          // shared with any other Ollama on the PC (tray app, service), so
+          // killing by name would take down instances that aren't ours.
+          // stopOllama() already tree-kills our own server and its runners by PID.
           ['taskkill', ['/F', '/T', '/IM', 'whisper-server.exe']],
         ]
       : [
-          ['pkill', ['-f', 'ollama serve']],
           ['pkill', ['-f', 'whisper-server']],
         ];
 
@@ -336,17 +393,27 @@ let exitKeepModelsLoaded = false;
 async function performShutdown(keepModelsLoaded) {
   if (keepModelsLoaded) {
     win?.webContents.send('shutdown-status', { message: 'Closing…' });
+    // Remember which PID we left running so the next launch can re-adopt it
+    // as ours instead of mistaking it for a foreign instance.
+    if (weSpawnedOllama && ownedOllamaPid) {
+      hostSettings.keptOllamaPid = ownedOllamaPid;
+      saveHostSettings();
+    }
     mobileServer?.stop();
     voiceInput?.stopServer();
     try { getDb()?.close(); } catch { /* already closed */ }
     return;
   }
-  win?.webContents.send('shutdown-status', { message: 'Unloading models…' });
-  await unloadRunningModels();
+  // An external Ollama's resident models may belong to other programs using
+  // it, so only unload when the server is ours.
+  if (weSpawnedOllama) {
+    win?.webContents.send('shutdown-status', { message: 'Unloading models…' });
+    await unloadRunningModels();
+  }
   win?.webContents.send('shutdown-status', { message: 'Stopping services…' });
   mobileServer?.stop();
   voiceInput?.stopServer();
-  stopOllama();
+  await stopOllama();
   await killStragglers();
   try { getDb()?.close(); } catch { /* already closed */ }
 }
@@ -780,12 +847,21 @@ ipcMain.handle('ollama:get-log', () => ollamaLog);
 // ---------------------------------------------------------------------------
 // IPC — model storage location (portable folder vs. a host-machine folder)
 // ---------------------------------------------------------------------------
-ipcMain.handle('models:get-location', () => ({
-  portableDir: portableModelsDir,
-  customDir: hostSettings.customModelsDir || null,
-  activeDir: getEffectiveModelsDir(),
-  managedByApp: weSpawnedOllama,
-}));
+// activeDir is only known when we own the server — an external Ollama uses
+// its own configured folder, which we can't query over its API. For that
+// case externalDirGuess is the folder it most likely uses: OLLAMA_MODELS if
+// set in this user's environment, else Ollama's standard default.
+function getModelsLocation() {
+  return {
+    portableDir: portableModelsDir,
+    customDir: hostSettings.customModelsDir || null,
+    activeDir: weSpawnedOllama ? getEffectiveModelsDir() : null,
+    externalDirGuess: weSpawnedOllama ? null : (process.env.OLLAMA_MODELS || path.join(os.homedir(), '.ollama', 'models')),
+    managedByApp: weSpawnedOllama,
+  };
+}
+
+ipcMain.handle('models:get-location', () => getModelsLocation());
 
 ipcMain.handle('models:choose-folder', async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog(win, {
@@ -805,7 +881,7 @@ ipcMain.handle('models:choose-folder', async () => {
   await restartManagedOllama('Switching model folder…');
   return {
     success: true,
-    location: { portableDir: portableModelsDir, customDir: chosen, activeDir: getEffectiveModelsDir(), managedByApp: weSpawnedOllama },
+    location: getModelsLocation(),
   };
 });
 
@@ -815,7 +891,7 @@ ipcMain.handle('models:use-portable', async () => {
   await restartManagedOllama('Switching model folder…');
   return {
     success: true,
-    location: { portableDir: portableModelsDir, customDir: null, activeDir: getEffectiveModelsDir(), managedByApp: weSpawnedOllama },
+    location: getModelsLocation(),
   };
 });
 
