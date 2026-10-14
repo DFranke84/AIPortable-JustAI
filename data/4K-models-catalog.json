@@ -1,0 +1,74 @@
+{
+  "categories": {
+    "General": 1,
+    "Reasoning": 2,
+    "Vision": 3,
+    "NSFW": 4,
+    "Coding": 5,
+    "Creative": 6,
+    "Survival": 7,
+    "Embedding": 8
+  },
+  "models": {
+    "nomic-embed-text:latest": {
+      "name": "Search Index",
+      "size": "274 MB",
+      "category": "Embedding",
+      "description": "Not a chat model — pull this once to power the Reference Library's semantic search (the 📚 toggle in chat, and the Library tab's search). Tiny and fast; works regardless of whatever chat model you actually talk to."
+    },
+    "qwen3.5:4b": {
+      "name": "Core",
+      "size": "3.4 GB",
+      "category": "General",
+      "description": "Same Aug-2026-era generation as the other tiers' picks, and a large step up from Qwen2.5-3B (reported MMLU-Pro 79.1 vs MMLU 65.6). Genuinely tight on a strict 4GB card though — weights alone eat most of the budget, so keep context short (2-4K tokens). If you hit VRAM pressure, drop to Core Lite below instead. Vision claims for this family are unconfirmed on Ollama (see Core+ note in the 8GB file) — treat as text-only"
+    },
+    "qwen3.5:2b": {
+      "name": "Core Lite",
+      "size": "2.7 GB",
+      "category": "General",
+      "description": "Same generation as Core above, one size down — comfortably fits 4GB with real headroom for context instead of running right up against the limit. The safer default; step up to Core only if you want the extra quality and can live with a short context window"
+    },
+    "deepseek-r1:1.5b": {
+      "name": "Logic",
+      "size": "1.1 GB",
+      "category": "Reasoning",
+      "description": "Smallest genuine chain-of-thought model (Qwen-1.5B distill of R1) — the only real reasoning option that fits 4GB comfortably"
+    },
+    "moondream:latest": {
+      "name": "Eye",
+      "size": "1.7 GB",
+      "category": "Vision",
+      "description": "Purpose-built tiny vision model — fast image captioning and simple visual Q&A on minimal VRAM"
+    },
+    "qwen3-vl:2b": {
+      "name": "Eye Scout",
+      "size": "2.0 GB",
+      "category": "Vision",
+      "description": "Newer-gen vision-language model — noticeably better OCR and detail recognition than Moondream for a bit more VRAM"
+    },
+    "huihui_ai/qwen2.5-abliterate:3b": {
+      "name": "Unchained",
+      "size": "1.9 GB",
+      "category": "NSFW",
+      "description": "Abliterated Qwen2.5-3B — smallest model with refusal behavior fully removed, still coherent at this size"
+    },
+    "qwen2.5-coder:1.5b": {
+      "name": "Dev",
+      "size": "1.0 GB",
+      "category": "Coding",
+      "description": "Smallest Qwen2.5-Coder release — good for autocomplete and short snippets, not full-file refactors"
+    },
+    "llama3.2:3b": {
+      "name": "Muse",
+      "size": "2.0 GB",
+      "category": "Creative",
+      "description": "Punches above its weight for creative writing on very limited hardware; natural prose for its size"
+    },
+    "hf.co/bartowski/Dolphin3.0-Llama3.2-3B-GGUF:q4_K_M": {
+      "name": "Ranger",
+      "size": "1.9 GB",
+      "category": "Survival",
+      "description": "No model is trained specifically on survival literature, but Dolphin's training strips refusal behavior out of the dataset entirely — where a safety-tuned model will hedge or decline on improvised first aid, water purification chemistry, or defensive topics, Dolphin just answers."
+    }
+  }
+}

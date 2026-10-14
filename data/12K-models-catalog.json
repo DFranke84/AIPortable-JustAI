@@ -1,0 +1,68 @@
+{
+  "categories": {
+    "General": 1,
+    "Reasoning": 2,
+    "Vision": 3,
+    "NSFW": 4,
+    "Coding": 5,
+    "Creative": 6,
+    "Survival": 7,
+    "Embedding": 8
+  },
+  "models": {
+    "nomic-embed-text:latest": {
+      "name": "Search Index",
+      "size": "274 MB",
+      "category": "Embedding",
+      "description": "Not a chat model — pull this once to power the Reference Library's semantic search (the 📚 toggle in chat, and the Library tab's search). Tiny and fast; works regardless of whatever chat model you actually talk to."
+    },
+    "qwen3:14b": {
+      "name": "Core Pro",
+      "size": "9.0 GB",
+      "category": "General",
+      "description": "Newest Qwen generation at 14B — best general quality that still fits 12GB. Tight: keep context under ~8K tokens for comfortable headroom"
+    },
+    "deepseek-r1:14b": {
+      "name": "Logic Pro",
+      "size": "9.0 GB",
+      "category": "Reasoning",
+      "description": "Deeper reasoning and larger effective context than the 7B distill — for genuinely hard multi-step problems"
+    },
+    "qwen3-vl:8b": {
+      "name": "Eye Pro",
+      "size": "6.0 GB",
+      "category": "Vision",
+      "description": "Handles document OCR, chart reading, and multi-turn image Q&A well — the sweet spot vision model for 12-16GB cards"
+    },
+    "richardyoung/qwen3-14b-abliterated:q4_K_M": {
+      "name": "Unchained Pro",
+      "size": "9.0 GB",
+      "category": "NSFW",
+      "description": "Abliterated Qwen3-14B — noticeably smarter and more coherent than the 8B-class abliterated models while still fitting 12GB"
+    },
+    "qwen2.5-coder:14b": {
+      "name": "Dev Pro",
+      "size": "9.0 GB",
+      "category": "Coding",
+      "description": "Meaningful step up from the 7B coder for multi-file context and harder refactors, still comfortable on 12GB"
+    },
+    "mistral-nemo:12b": {
+      "name": "Muse Pro",
+      "size": "7.1 GB",
+      "category": "Creative",
+      "description": "Mistral NeMo 12B (Drummer creative-writing tune) — strong prose and character consistency, with headroom to spare on 12GB"
+    },
+    "qwen2.5:14b": {
+      "name": "Ranger Pro",
+      "size": "9.7 GB",
+      "category": "Survival",
+      "description": "No purpose-built survival/homesteading model exists at any size — Qwen2.5-14B is a proven, broad-knowledge alternative to the newer Qwen3 General pick, giving you a second reliable reference model. It's still safety-tuned, though, so it will hedge on some medical/defensive topics — see Ranger+ below for those. Pair with RAG over actual field manuals for grounded, citable answers"
+    },
+    "hf.co/bartowski/Dolphin3.0-Llama3.1-8B-GGUF:q4_K_M": {
+      "name": "Ranger+",
+      "size": "4.9 GB",
+      "category": "Survival",
+      "description": "No 14B-class Dolphin exists, so this is the same refusal-free 8B pick as the 8GB tier, reused here because it fits a 12GB card with room to spare. Trades knowledge breadth for actually answering — use this one instead of Ranger Pro when the question is something a safety-tuned model would decline (improvised first aid, defensive tactics, off-grid chemistry)"
+    }
+  }
+}

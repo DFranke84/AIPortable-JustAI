@@ -1,0 +1,20 @@
+Optional - only needed for the microphone / voice-input button.
+
+AUTOMATIC:  Setup-Windows.bat -WithVoice
+
+MANUAL:
+  1. From https://github.com/ggml-org/whisper.cpp/releases download
+     whisper-bin-x64.zip (if the newest release has no files attached, use the
+     newest one that does). Copy EVERYTHING inside its Release\ folder
+     (whisper-server.exe plus all the .dll files) into this folder.
+  2. Download a model, e.g.
+       https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
+     and save it here as:  model.bin
+
+Result:
+  resources\whisper\win\whisper-server.exe
+  resources\whisper\win\model.bin
+  resources\whisper\win\*.dll
+
+Without these, the mic button just reports "unavailable" - everything else
+in the app works fine.

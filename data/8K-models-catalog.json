@@ -1,0 +1,62 @@
+{
+  "categories": {
+    "General": 1,
+    "Reasoning": 2,
+    "Vision": 3,
+    "NSFW": 4,
+    "Coding": 5,
+    "Creative": 6,
+    "Survival": 7,
+    "Embedding": 8
+  },
+  "models": {
+    "nomic-embed-text:latest": {
+      "name": "Search Index",
+      "size": "274 MB",
+      "category": "Embedding",
+      "description": "Not a chat model — pull this once to power the Reference Library's semantic search (the 📚 toggle in chat, and the Library tab's search). Tiny and fast; works regardless of whatever chat model you actually talk to."
+    },
+    "qwen3.5:9b": {
+      "name": "Core+",
+      "size": "6.6 GB",
+      "category": "General",
+      "description": "Newer-generation 8B-class model with 256K context and reportedly the best tool-calling accuracy of any open model this size. Still fits 8GB with room to spare. Sources disagree on whether its vision half actually works through Ollama yet (separate mmproj file, not confirmed bundled) — treat it as text-only here and keep Eye+ below for image work until that's confirmed"
+    },
+    "deepseek-r1:7b": {
+      "name": "Logic+",
+      "size": "4.7 GB",
+      "category": "Reasoning",
+      "description": "Qwen-7B distill of DeepSeek-R1 — real step-by-step reasoning with room to spare on an 8GB card"
+    },
+    "qwen2.5vl:7b": {
+      "name": "Eye+",
+      "size": "4.8 GB",
+      "category": "Vision",
+      "description": "The standard recommendation for 8GB vision cards — attach a photo/screenshot and it reads, describes, and answers questions about it well"
+    },
+    "mannix/llama3.1-8b-abliterated:q5_K_M": {
+      "name": "Unchained+",
+      "size": "5.7 GB",
+      "category": "NSFW",
+      "description": "The most-pulled abliterated Llama on Ollama — refusal-free, keeps Llama 3.1's underlying quality, comfortable fit on 8GB"
+    },
+    "qwen2.5-coder:7b": {
+      "name": "Dev+",
+      "size": "4.7 GB",
+      "category": "Coding",
+      "description": "88.4% HumanEval — real code generation and debugging quality, not just autocomplete"
+    },
+    "fluffy/l3-8b-stheno-v3.2:q4_K_M": {
+      "name": "Muse+",
+      "size": "4.9 GB",
+      "category": "Creative",
+      "description": "Llama-3-8B tune purpose-built for roleplay and character consistency — light enough for 8GB, still a genre favorite"
+    },
+    "hf.co/bartowski/Dolphin3.0-Llama3.1-8B-GGUF:q4_K_M": {
+      "name": "Ranger+",
+      "size": "4.9 GB",
+      "category": "Survival",
+      "description": "Dolphin 3.0's 8B Llama fine-tune, trained without safety RLHF — refusal examples were stripped from the training data rather than aligned away, so it won't hedge on improvised medical care, defensive use, or off-grid chemistry the way a standard-tuned model does. Its own knowledge benchmarks run noticeably below Llama 3.1 8B's, so it's less encyclopedic — but for a category about what to do when help isn't coming, answering beats refusing."
+    }
+  }
+}

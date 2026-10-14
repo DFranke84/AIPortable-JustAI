@@ -1,0 +1,62 @@
+{
+  "categories": {
+    "General": 1,
+    "Reasoning": 2,
+    "Vision": 3,
+    "NSFW": 4,
+    "Coding": 5,
+    "Creative": 6,
+    "Survival": 7,
+    "Embedding": 8
+  },
+  "models": {
+    "nomic-embed-text:latest": {
+      "name": "Search Index",
+      "size": "274 MB",
+      "category": "Embedding",
+      "description": "Not a chat model — pull this once to power the Reference Library's semantic search (the 📚 toggle in chat, and the Library tab's search). Tiny and fast; works regardless of whatever chat model you actually talk to."
+    },
+    "qwen3.8:27b": {
+      "name": "Core Ultra",
+      "size": "18 GB",
+      "category": "General",
+      "description": "Same newest-gen model as the 24GB tier — nothing bigger meaningfully beats it while fitting cleanly under 32GB, so the extra headroom goes toward its full 262K native context instead of a bigger, older model. Qwen2.5-32B (the previous pick here) is still a fine fallback if you specifically want more raw parameters over the newer architecture"
+    },
+    "deepseek-r1:32b": {
+      "name": "Logic Ultra",
+      "size": "20 GB",
+      "category": "Reasoning",
+      "description": "Same model as the 24GB tier — nothing bigger (70B-class) fits under 32GB. The payoff here is a much larger KV cache: long chain-of-thought traces and big reasoning contexts no longer get truncated"
+    },
+    "qwen3-vl:32b": {
+      "name": "Eye Ultra",
+      "size": "21 GB",
+      "category": "Vision",
+      "description": "Same top-tier vision model as the 24GB tier — the extra 32GB headroom goes toward higher image resolution and multi-image context instead of a larger model, since nothing meaningfully bigger fits safely under 32GB"
+    },
+    "hf.co/bartowski/cognitivecomputations_Dolphin3.0-R1-Mistral-24B-GGUF:q4_K_M": {
+      "name": "Unchained Ultra",
+      "size": "16 GB",
+      "category": "NSFW",
+      "description": "Dolphin 3.0's reasoning variant — same refusal-free training as the standard Dolphin, plus ~800K reasoning traces bolted on, so it can chain-of-thought its way through complex uncensored requests. 32GB gives it plenty of room for long context. Pull via Ollama's Hugging Face bridge (confirmed bartowski quant repo)"
+    },
+    "qwen2.5-coder:32b": {
+      "name": "Dev Ultra",
+      "size": "20 GB",
+      "category": "Coding",
+      "description": "92.7% HumanEval — the strongest dense (non-MoE) open coder that fits a single GPU, with 32GB leaving room for very long context on large codebases"
+    },
+    "hf.co/bartowski/cognitivecomputations_Dolphin3.0-Mistral-24B-GGUF:q4_K_M": {
+      "name": "Muse Ultra",
+      "size": "14 GB",
+      "category": "Creative",
+      "description": "Same pick as the 24GB tier — the next credible step up (Llama 3.3 70B-class fiction models) needs ~48GB, so it doesn't fit. Spend the extra 32GB headroom on context length for full chapters instead of a bigger model. Pull via Ollama's Hugging Face bridge (confirmed bartowski quant repo)"
+    },
+    "qwen3.6:27b": {
+      "name": "Ranger Ultra",
+      "size": "17 GB",
+      "category": "Survival",
+      "description": "Strongest general-knowledge model that fits comfortably under 32GB, with heavy headroom for RAG — load several full PDF reference books (first aid, food preservation, electrical code, homesteading) into context at once for grounded, citable answers. It's still safety-tuned, though: both 24B Dolphin variants are already claimed by Creative and NSFW in this file, so rather than force a third duplicate entry, use Unchained Ultra above (Dolphin3.0-R1-Mistral-24B) directly whenever a question is one this model hedges on"
+    }
+  }
+}

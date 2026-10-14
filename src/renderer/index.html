@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'self' blob:; img-src 'self' data: blob: libimg:; connect-src 'self' libimg: libpdf:;" />
+  <title>Local AI</title>
+  <script src="theme-init.js"></script>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="vendor/pdf_viewer.css" />
+  <link rel="stylesheet" href="vendor/emoji/emoji.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="sidebar-head">
+        <span class="brand">Local AI</span>
+        <div class="sidebar-head-actions">
+          <button id="clear-chats" class="btn-icon" title="Delete all chats">🗑</button>
+          <button id="new-chat" class="btn-icon" title="New chat">+</button>
+        </div>
+      </div>
+      <div id="chat-list" class="chat-list"></div>
+      <div class="sidebar-footer">
+        <button id="open-analyze-view" class="tools-launcher">🔍 Analyze Image</button>
+        <button id="open-library-view" class="tools-launcher">📖 Reference Library</button>
+        <button id="open-translate-view" class="tools-launcher">🌐 Translate</button>
+        <button id="open-tools" class="tools-launcher">🛠️ Tools/Settings</button>
+        <button id="exit-app" class="tools-launcher exit-btn" title="Shut down the model runtime and exit">🚪 Exit</button>
+      </div>
+    </aside>
+
+    <main class="main">
+      <div id="chat-view" class="main-view active">
+        <header class="topbar">
+          <div class="status">
+            <span id="status-dot" class="status-dot"></span>
+            <span id="status-text">Starting model runtime…</span>
+            <span id="model-load-dot" class="model-load-dot" title="Model not loaded in memory yet"></span>
+            <span id="model-load-text" class="model-load-text hidden"></span>
+          </div>
+          <div class="topbar-actions">
+            <select id="model-select" class="model-select"></select>
+            <button id="export-chat" class="btn-icon" title="Export chat">↓</button>
+            <button id="theme-toggle" class="btn-icon" title="Toggle light/dark mode">🌙</button>
+          </div>
+        </header>
+
+        <div class="messages-wrap">
+          <div id="messages" class="messages">
+            <div class="empty-state">
+              <p>Nothing runs anywhere but this machine.</p>
+              <p class="empty-sub">Pick a model above and start a conversation.</p>
+            </div>
+          </div>
+          <button id="scroll-top-btn" class="scroll-top-btn hidden" title="Scroll to top">↑ Top</button>
+        </div>
+
+        <div id="attachments-row" class="attachments-row hidden"></div>
+        <form id="composer" class="composer">
+          <button id="attach-btn" type="button" class="btn-icon" title="Attach a file (image, PDF, Word, text) — or drop one here">📁</button>
+          <input id="attach-file" type="file" multiple accept="image/png,image/jpeg,image/gif,image/webp,image/bmp,.pdf,.txt,.md,.docx,.doc" hidden />
+          <button id="mic-btn" type="button" class="btn-icon mic" title="Voice input">🎤</button>
+          <button id="rag-toggle" type="button" class="btn-icon" title="Use library context (RAG)">📚</button>
+          <textarea id="input" placeholder="Message your model…" rows="1"></textarea>
+          <button id="send" type="submit" class="btn-send" disabled>Send</button>
+        </form>
+      </div>
+
+      <div id="library-view" class="main-view">
+        <header class="topbar">
+          <div class="status">
+            <button id="library-back-to-chat" class="btn-icon" title="Back to chat">←</button>
+            <span class="brand">Reference Library</span>
+          </div>
+        </header>
+        <div class="library-view-body">
+          <div id="browser-list-view">
+            <p class="panel-hint">Browse and read every document in your library — everything here is also searchable via the 📚 toggle in chat. Add documents from Tools/Settings → Library.</p>
+            <div class="search-row">
+              <input id="browser-query" type="text" placeholder="Filter by title…" />
+              <select id="browser-category"><option value="">All categories</option></select>
+              <select id="browser-source"><option value="">All sources</option></select>
+              <button id="browser-search-btn" class="btn-icon">→</button>
+            </div>
+            <div id="browser-results" class="library-list library-grid"></div>
+            <button id="browser-load-more" class="pull-btn" hidden>Load more</button>
+          </div>
+          <div id="browser-doc-view" hidden>
+            <button id="browser-back-btn" class="pull-btn">← Back to results</button>
+            <h3 id="browser-doc-title"></h3>
+            <div id="browser-doc-meta" class="panel-hint"></div>
+            <div id="browser-pdf-controls" class="search-row" hidden>
+              <button id="browser-view-pdf-btn" class="pull-btn">📄 View original PDF scan</button>
+              <button id="browser-view-text-btn" class="pull-btn" hidden>📃 Show extracted text</button>
+              <button id="browser-open-pdf-btn" class="pull-btn">↗ Open in system viewer</button>
+            </div>
+            <div id="browser-doc-images" class="browser-doc-images"></div>
+            <div id="browser-doc-body" class="browser-doc-body"></div>
+            <div id="pdf-viewer-wrap" class="pdf-viewer-wrap" hidden>
+              <div id="pdf-viewer-container" class="pdf-viewer-container">
+                <div id="pdf-viewer-inner" class="pdfViewer"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="analyze-view" class="main-view">
+        <header class="topbar">
+          <div class="status">
+            <button id="analyze-back-to-chat" class="btn-icon" title="Back to chat">←</button>
+            <span class="brand">Analyze Image</span>
+          </div>
+        </header>
+        <div class="library-view-body">
+          <div id="analyze-dropzone" class="analyze-dropzone">
+            <p>Drag an image here, or</p>
+            <button id="analyze-browse-btn" class="pull-btn">Choose an image…</button>
+            <input id="analyze-file-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/bmp" hidden />
+          </div>
+
+          <div id="analyze-workspace" hidden>
+            <div class="analyze-top-row">
+              <img id="analyze-preview" class="analyze-preview" />
+              <div class="analyze-controls">
+                <div id="analyze-no-vision-model" class="panel-hint" hidden>
+                  No vision-capable model is installed. Pull one from Tools → Models (e.g. moondream, llava, qwen2.5vl) first.
+                </div>
+                <label id="analyze-model-row" class="panel-hint" hidden>
+                  Vision model:
+                  <select id="analyze-model-select"></select>
+                </label>
+                <div class="stacked-row">
+                  <button id="analyze-run-btn" class="btn-send">Analyze</button>
+                  <button id="analyze-reset-btn" class="pull-btn">Choose a different image</button>
+                </div>
+              </div>
+            </div>
+
+            <div id="analyze-results" hidden>
+              <div id="analyze-sources" class="sources-tag" hidden></div>
+              <div id="analyze-answer" class="browser-doc-body"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="translate-view" class="main-view">
+        <header class="topbar">
+          <div class="status">
+            <button id="translate-back-to-chat" class="btn-icon" title="Back to chat">←</button>
+            <span class="brand">Translate</span>
+          </div>
+        </header>
+        <div class="library-view-body">
+          <p class="panel-hint">Type or paste text, or drag/drop an image containing text (a sign, label, page) — whichever you provide gets translated.</p>
+
+          <textarea id="translate-text-input" class="translate-textarea" placeholder="Type or paste text to translate…" rows="4"></textarea>
+
+          <label id="translate-text-model-hint" class="panel-hint translate-lang-row">
+            Text model (typed text only):
+            <select id="translate-text-model-select" class="translate-lang-input"></select>
+          </label>
+
+          <div id="translate-dropzone" class="analyze-dropzone">
+            <p>Drag an image with text here, or</p>
+            <button id="translate-browse-btn" class="pull-btn">Choose an image…</button>
+            <input id="translate-file-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/bmp" hidden />
+          </div>
+
+          <div id="translate-image-workspace" hidden>
+            <div class="analyze-top-row">
+              <img id="translate-preview" class="analyze-preview" />
+              <div class="analyze-controls">
+                <div id="translate-no-vision-model" class="panel-hint" hidden>
+                  No vision-capable model is installed. Pull one from Tools → Models (e.g. moondream, llava, qwen2.5vl) to translate text in images.
+                </div>
+                <label id="translate-model-row" class="panel-hint" hidden>
+                  Vision model (this image):
+                  <select id="translate-model-select"></select>
+                </label>
+                <button id="translate-remove-image-btn" class="pull-btn">Remove image</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="translate-lang-row">
+            <label class="panel-hint" for="translate-lang-select">Translate to:</label>
+            <select id="translate-lang-select" class="translate-lang-input">
+              <option>English</option>
+              <option>Spanish</option>
+              <option>French</option>
+              <option>German</option>
+              <option>Italian</option>
+              <option>Portuguese</option>
+              <option>Dutch</option>
+              <option>Russian</option>
+              <option>Chinese (Simplified)</option>
+              <option>Chinese (Traditional)</option>
+              <option>Japanese</option>
+              <option>Korean</option>
+              <option>Arabic</option>
+              <option>Hindi</option>
+              <option>Vietnamese</option>
+              <option>Turkish</option>
+              <option>Polish</option>
+              <option>Swedish</option>
+              <option>Thai</option>
+              <option>Indonesian</option>
+              <option>Ukrainian</option>
+              <option>Greek</option>
+              <option>Hebrew</option>
+              <option value="__other__">Other (type below)…</option>
+            </select>
+            <input id="translate-target-lang" type="text" placeholder="Language name…" class="translate-lang-input" hidden />
+          </div>
+
+          <div class="stacked-row">
+            <button id="translate-run-btn" class="btn-send">Translate</button>
+          </div>
+
+          <div id="translate-results" hidden>
+            <div id="translate-answer" class="browser-doc-body"></div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- Tools panel: slides over the right side -->
+    <div id="tools-overlay" class="tools-overlay hidden">
+      <div class="tools-panel">
+        <div class="tools-head">
+          <div class="tabs">
+            <button class="tab active" data-tab="models">Models</button>
+            <button class="tab" data-tab="library">Library</button>
+            <button class="tab" data-tab="mobile">Mobile sync</button>
+            <button class="tab" data-tab="system">System</button>
+          </div>
+          <button id="close-tools" class="btn-icon">×</button>
+        </div>
+
+        <section id="tab-models" class="tab-panel active">
+          <h4 class="panel-subhead" style="margin-top:0;">Model storage location</h4>
+          <p class="panel-hint">
+            Models default to a folder inside this app, so they travel with it on a USB
+            drive. If you'd rather keep them on this PC's own (faster) drive, point them
+            at a folder here — that choice is remembered per-machine, not on the drive.
+          </p>
+          <div id="models-location-info" class="system-info"></div>
+          <div class="stacked-row">
+            <button id="models-choose-folder" class="pull-btn">Choose folder on this PC…</button>
+            <button id="models-use-portable" class="pull-btn">Use portable folder</button>
+          </div>
+          <p class="panel-hint">Copy already-downloaded models between the two locations:</p>
+          <div class="stacked-row">
+            <button id="models-sync-to-host" class="pull-btn">Sync: Portable → PC folder</button>
+            <button id="models-sync-to-portable" class="pull-btn">Sync: PC folder → Portable</button>
+          </div>
+          <div id="models-sync-status" class="panel-hint"></div>
+
+          <h4 class="panel-subhead">GPU size</h4>
+          <p class="panel-hint">
+            Each tier below is a catalog of models curated to fit comfortably in that much
+            GPU VRAM. Pick the tier that matches your card, or select several to mix sizes
+            together — the model list and dropdown combine and sort every selection you pick.
+          </p>
+          <div id="catalog-tiers-list" class="tier-select-list"></div>
+
+          <h4 class="panel-subhead">Context length</h4>
+          <p class="panel-hint">
+            How much conversation, attachment, and library context each message can use —
+            a separate setting from GPU size above, though the two are related: a smaller
+            card generally wants a smaller number here to leave room for the model itself,
+            while a larger card can afford to go bigger. "Auto" leaves this to Ollama, which
+            sizes it from available VRAM and can be as small as 4K — often too little once
+            an image, document, or long chat history is involved.
+          </p>
+          <div id="context-size-list" class="tier-select-list"></div>
+
+          <h4 class="panel-subhead">Catalog</h4>
+          <p class="panel-hint">
+            Pull models from the catalog below. Already-installed models are marked.
+            Each tier comes from its own plain JSON file — edit one to add, remove, rename,
+            or reclassify entries; changes show up next time this tab loads, no restart needed.
+          </p>
+          <div id="catalog-file-info-list" class="catalog-file-info-list"></div>
+          <div id="catalog-list" class="catalog-list"></div>
+        </section>
+
+        <section id="tab-library" class="tab-panel">
+          <p class="panel-hint">Upload text, Markdown, PDF, or Word documents and search them alongside chat. Turn on the 📚 button in the composer to have relevant matches fed into the model automatically.</p>
+          <div class="search-row">
+            <select id="library-upload-category"><option value="">Choose a category…</option></select>
+            <input id="library-new-category-input" type="text" placeholder="New category name…" hidden />
+          </div>
+          <input id="library-file" type="file" accept=".txt,.md,.text,.pdf,.docx,.doc" />
+          <div class="search-row">
+            <input id="library-query" type="text" placeholder="Search your library…" />
+            <button id="library-search-btn" class="btn-icon">→</button>
+          </div>
+          <div id="library-results" class="library-list"></div>
+          <h4 class="panel-subhead">Uploaded</h4>
+          <div id="library-uploads" class="library-list"></div>
+        </section>
+
+        <section id="tab-mobile" class="tab-panel">
+          <p class="panel-hint">Start a local server so a phone on the same network can chat with this model.</p>
+          <div id="mobile-status" class="mobile-status">Not running</div>
+          <button id="mobile-toggle" class="btn-send">Start</button>
+        </section>
+
+        <section id="tab-system" class="tab-panel">
+          <div id="system-info" class="system-info">Loading…</div>
+          <h4 class="panel-subhead">Ollama log</h4>
+          <p class="panel-hint">
+            Ollama runs in the background with no console window of its own — this is a
+            live tail of its own stdout/stderr, for troubleshooting.
+          </p>
+          <div class="search-row">
+            <button id="ollama-log-refresh" class="pull-btn">Refresh</button>
+          </div>
+          <pre id="ollama-log-view" class="ollama-log-view">(not loaded yet — click Refresh)</pre>
+        </section>
+      </div>
+    </div>
+
+    <!-- Shown while the graceful shutdown sequence runs after Exit is
+         clicked (unloading models, stopping Ollama, etc.) -->
+    <div id="shutdown-overlay" class="shutdown-overlay hidden">
+      <div id="shutdown-message">Shutting down…</div>
+    </div>
+
+    <!-- Replaces native alert()/confirm() — those render as OS dialogs that
+         Electron can't reposition (they land wherever Windows/Chromium
+         defaults to, not necessarily over this window), so anything the app
+         needs to tell the user goes through this instead, centered in the
+         app's own viewport by ordinary CSS. See showAppAlert/showAppConfirm
+         in renderer.js. -->
+    <div id="app-modal-overlay" class="app-modal-overlay hidden">
+      <div class="app-modal">
+        <div id="app-modal-message" class="app-modal-message"></div>
+        <label id="app-modal-checkbox-row" class="app-modal-checkbox-row hidden">
+          <input type="checkbox" id="app-modal-checkbox" />
+          <span id="app-modal-checkbox-label"></span>
+        </label>
+        <div class="app-modal-actions">
+          <button id="app-modal-cancel" class="pull-btn hidden">Cancel</button>
+          <button id="app-modal-ok" class="btn-send">OK</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Populated by `npm install` (see scripts/copy-vendor.js). -->
+  <script src="vendor/marked.min.js"></script>
+  <script type="module" src="pdfViewer.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>

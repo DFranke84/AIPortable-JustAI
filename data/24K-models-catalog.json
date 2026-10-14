@@ -1,0 +1,68 @@
+{
+  "categories": {
+    "General": 1,
+    "Reasoning": 2,
+    "Vision": 3,
+    "NSFW": 4,
+    "Coding": 5,
+    "Creative": 6,
+    "Survival": 7,
+    "Embedding": 8
+  },
+  "models": {
+    "nomic-embed-text:latest": {
+      "name": "Search Index",
+      "size": "274 MB",
+      "category": "Embedding",
+      "description": "Not a chat model — pull this once to power the Reference Library's semantic search (the 📚 toggle in chat, and the Library tab's search). Tiny and fast; works regardless of whatever chat model you actually talk to."
+    },
+    "qwen3.8:27b": {
+      "name": "Core Max",
+      "size": "18 GB",
+      "category": "General",
+      "description": "Dense 27B model with native vision+video support and large reported gains on coding/agentic benchmarks (SWE-bench, Terminal-Bench) over the previous Qwen generation; those specific numbers are Alibaba's own, not yet reproduced independently, but the generational jump is real. Still leaves room for long context on 24GB"
+    },
+    "deepseek-r1:32b": {
+      "name": "Logic Max",
+      "size": "20 GB",
+      "category": "Reasoning",
+      "description": "The standard 24GB reasoning pick — full chain-of-thought at a size where quality stops being obviously limited by parameter count"
+    },
+    "qwen3-vl:32b": {
+      "name": "Eye Max",
+      "size": "21 GB",
+      "category": "Vision",
+      "description": "Top-tier open vision-language model that fits a single 24GB card — strong OCR, document understanding, and detailed image description"
+    },
+    "hf.co/Stabhappy/gemma-4-31B-it-heretic-GGUF": {
+      "name": "Unchained Max",
+      "size": "17 GB",
+      "category": "NSFW",
+      "description": "Gemma 4 31B, de-censored via the 'heretic' technique — keeps almost all of the base model's reasoning (MMLU barely drops) while refusing nothing. Pulled via Ollama's Hugging Face bridge (hf.co/...); confirm the exact quant tag on the repo page before pulling"
+    },
+    "qwen3-coder:30b": {
+      "name": "Dev Max",
+      "size": "19 GB",
+      "category": "Coding",
+      "description": "Best quality-per-GB coding model on 24-32GB — MoE with only 3.3B active params so it's fast despite the size, 256K context, built for agentic tool-calling workflows"
+    },
+    "hf.co/bartowski/cognitivecomputations_Dolphin3.0-Mistral-24B-GGUF:q4_K_M": {
+      "name": "Muse Max",
+      "size": "14 GB",
+      "category": "Creative",
+      "description": "Dolphin 3.0's flagship — refusal-free fine-tune with the broadest creative range of any 24GB-class writing model. Pull via Ollama's Hugging Face bridge (confirmed bartowski quant repo)"
+    },
+    "hf.co/bartowski/cognitivecomputations_Dolphin3.0-R1-Mistral-24B-GGUF:q4_K_M": {
+      "name": "Ranger Max",
+      "size": "16 GB",
+      "category": "Survival",
+      "description": "Dolphin's reasoning-tuned flagship: refusal-free like the Creative pick above, plus ~800K chain-of-thought traces bolted on — so it can work through a multi-step survival problem (diagnosing a symptom, troubleshooting an off-grid electrical fault) instead of pattern-matching an answer, and it won't hedge on the medical/defensive/improvised-chemistry questions a safety-tuned model will. Pull via Ollama's Hugging Face bridge"
+    },
+    "qwen2.5:32b": {
+      "name": "Ranger Max Knowledge",
+      "size": "20 GB",
+      "category": "Survival",
+      "description": "The knowledge-breadth alternative to the Dolphin pick above — largest dense general-knowledge model that fits 24GB, distinct from the newer Qwen3.6 General pick, but still safety-tuned so it will occasionally decline. Reach for this on encyclopedic questions (canning times, wiring gauges); reach for Ranger Max above when the topic is one a filter would flag"
+    }
+  }
+}

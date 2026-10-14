@@ -1,0 +1,18 @@
+# Installed by the setup scripts - never commit these
+node_modules/
+runtime/
+src/renderer/vendor/
+dist/
+
+# Downloaded binaries (keep the PLACE_BINARY_HERE.txt notes)
+resources/ollama/*/*
+!resources/ollama/*/PLACE_BINARY_HERE.txt
+resources/whisper/*/*
+!resources/whisper/*/PLACE_BINARY_HERE.txt
+
+# Runtime data created by the app (keep the model catalog JSON files)
+data/*
+!data/*-models-catalog.json
+
+# Large media (feature tour video etc.)
+*.mp4

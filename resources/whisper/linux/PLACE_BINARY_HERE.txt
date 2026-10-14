@@ -1,0 +1,20 @@
+Optional - only needed for the microphone / voice-input button.
+
+AUTOMATIC:  bash scripts/setup-linux.sh --with-voice
+  (whisper.cpp publishes no Linux binaries, so this builds it from source -
+  needs git, cmake and a C++ compiler, which the script installs for you.)
+
+MANUAL:
+  git clone --depth 1 https://github.com/ggml-org/whisper.cpp
+  cmake -S whisper.cpp -B whisper.cpp/build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
+  cmake --build whisper.cpp/build -j --config Release --target whisper-server
+  cp whisper.cpp/build/bin/whisper-server resources/whisper/linux/whisper-server
+  curl -L -o resources/whisper/linux/model.bin \
+    https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin
+
+Result:
+  resources/whisper/linux/whisper-server
+  resources/whisper/linux/model.bin
+
+Without these, the mic button just reports "unavailable" - everything else
+in the app works fine.

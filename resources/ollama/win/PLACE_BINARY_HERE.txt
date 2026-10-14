@@ -1,0 +1,18 @@
+Portable Ollama for Windows goes in this folder.
+
+AUTOMATIC (recommended):  double-click Setup-Windows.bat in the project root
+  Downloads the official zip from GitHub and unpacks it here.
+
+MANUAL:
+  1. Download from https://github.com/ollama/ollama/releases/latest
+       ollama-windows-amd64.zip   (x64)
+       ollama-windows-arm64.zip   (ARM64)
+     Optional, AMD GPUs: also ollama-windows-amd64-rocm.zip
+  2. Extract it straight into this folder (not into a sub-folder), so you get:
+       resources\ollama\win\ollama.exe
+       resources\ollama\win\lib\ollama\...
+     If you downloaded the ROCm zip too, extract it into the same folder.
+
+Without this folder populated, the app still works IF Ollama is installed
+system-wide (https://ollama.com/download) - findBundledOllama() in
+src\main\main.js falls back to plain 'ollama' on PATH automatically.
