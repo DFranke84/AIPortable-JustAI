@@ -1644,7 +1644,7 @@ async function refreshSystemInfo() {
     <div class="row"><span>RAM</span><span>${info.ramGB} GB</span></div>
     <div class="row"><span>CPU</span><span>${info.cpuModel}</span></div>
     <div class="row"><span>Cores</span><span>${info.cpuCores}</span></div>
-    <div class="row"><span>Model storage</span><span>${loc.activeDir}</span></div>
+    <div class="row"><span>Model storage</span><span>${describeActiveModelsDir(loc)}</span></div>
   `;
   if (!loc.managedByApp) {
     const warning = document.createElement('p');
@@ -1670,14 +1670,21 @@ els.ollamaLogRefresh.onclick = async () => {
 };
 
 // ---- model storage location (portable folder vs. a host-machine folder) --
+// When an external Ollama owns the port, the folder it serves from isn't
+// ours to know for sure — show the likely default rather than our own setting.
+function describeActiveModelsDir(loc) {
+  if (loc.managedByApp) return loc.activeDir;
+  return `External Ollama — likely ${loc.externalDirGuess}`;
+}
+
 async function refreshModelsLocation() {
   const loc = await window.localAI.getModelsLocation();
   els.modelsLocationInfo.innerHTML = `
     <div class="row"><span>Portable folder</span><span>${loc.portableDir}</span></div>
     <div class="row"><span>PC folder</span><span>${loc.customDir || '— not set —'}</span></div>
-    <div class="row"><span>Currently active</span><span>${loc.activeDir}</span></div>
+    <div class="row"><span>Currently active</span><span>${describeActiveModelsDir(loc)}</span></div>
   `;
-  els.modelsUsePortable.disabled = loc.activeDir === loc.portableDir && !loc.customDir;
+  els.modelsUsePortable.disabled = !loc.customDir;
   els.modelsSyncToHost.disabled = !loc.customDir;
   els.modelsSyncToPortable.disabled = !loc.customDir;
 
