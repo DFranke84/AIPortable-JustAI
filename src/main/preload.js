@@ -20,13 +20,19 @@ contextBridge.exposeInMainWorld('localAI', {
   onChatToken: (cb) => on('chat-token', cb),
 
   // -- models ---------------------------------------------------------
-  listModels: () => ipcRenderer.invoke('ollama:list-models'),
+  // `purpose` is optional: 'vision' targets the image-tools runtime (which
+  // may be Ollama even while chat uses LM Studio); omitted = chat runtime.
+  listModels: (purpose) => ipcRenderer.invoke('ollama:list-models', purpose),
   getCurrentModel: () => ipcRenderer.invoke('ollama:current-model'),
   setCurrentModel: (name) => ipcRenderer.invoke('ollama:set-model', name),
   getOllamaStatus: () => ipcRenderer.invoke('ollama:status'),
   onOllamaStatus: (cb) => on('ollama-status', cb),
-  getRunningModels: () => ipcRenderer.invoke('ollama:running-models'),
-  getModelCapabilities: (name) => ipcRenderer.invoke('ollama:model-capabilities', name),
+  getRunningModels: (purpose) => ipcRenderer.invoke('ollama:running-models', purpose),
+  getModelCapabilities: (name, purpose) => ipcRenderer.invoke('ollama:model-capabilities', name, purpose),
+
+  // -- chat runtime (Ollama vs. LM Studio) ------------------------------
+  getBackendSettings: () => ipcRenderer.invoke('backend:get'),
+  setBackendSettings: (patch) => ipcRenderer.invoke('backend:set', patch),
 
   // -- model storage location (portable folder vs. a host-machine folder) --
   getModelsLocation: () => ipcRenderer.invoke('models:get-location'),
@@ -76,7 +82,7 @@ contextBridge.exposeInMainWorld('localAI', {
   libraryReadUpload: (id) => ipcRenderer.invoke('library:read-upload', id),
   librarySearch: (query, embedModel) => ipcRenderer.invoke('library:search', { query, embedModel }),
   libraryContext: (query, embedModel) => ipcRenderer.invoke('library:context', { query, embedModel }),
-  libraryIdentifyImage: (model, imageBase64, options) => ipcRenderer.invoke('library:identify-image', { model, imageBase64, options }),
+  libraryIdentifyImage: (model, imageBase64, options, purpose) => ipcRenderer.invoke('library:identify-image', { model, imageBase64, options, purpose }),
   libraryBrowse: (payload) => ipcRenderer.invoke('library:browse', payload),
   libraryBrowseFacets: () => ipcRenderer.invoke('library:browse-facets'),
   libraryGetDoc: (id) => ipcRenderer.invoke('library:get-doc', id),

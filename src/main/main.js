@@ -7,6 +7,7 @@ const os = require('os');
 
 const { initDb, getDb } = require('./db');
 const { OllamaManager, HOST: OLLAMA_HOST, PORT: OLLAMA_PORT } = require('./services/ollama');
+const { LMStudioManager } = require('./services/lmstudio');
 const { ModelDownloader, TIERS: CATALOG_TIERS } = require('./services/modelCatalog');
 const { MobileServer } = require('./services/mobileServer');
 const { VoiceInput } = require('./services/voiceInput');
@@ -165,7 +166,37 @@ protocol.registerSchemesAsPrivileged([
 // Services (instantiated once app is ready)
 // ---------------------------------------------------------------------------
 let ollamaProcess = null;
-let ollama, downloader, mobileServer, voiceInput, library;
+let ollama, lmstudio, downloader, mobileServer, voiceInput, library;
+
+// Which runtime answers chats: 'ollama' (default) or 'lmstudio'. Ollama is
+// started either way — library search embeddings always use its
+// nomic-embed-text (the precomputed library vectors were built with it), and
+// the model catalog/downloads are Ollama-only.
+function getLlmBackend() {
+  return hostSettings.llmBackend === 'lmstudio' ? 'lmstudio' : 'ollama';
+}
+function chatBackend() {
+  return getLlmBackend() === 'lmstudio' ? lmstudio : ollama;
+}
+// Runtime for the standalone image tools (Analyze Image, translating an
+// image): the chat runtime, unless the user ticked "Use Ollama for image
+// tools" to keep e.g. a small Ollama vision model for those while chatting
+// through LM Studio. Images attached in chat always go to the chat model.
+function visionBackend() {
+  return hostSettings.visionUseOllama ? ollama : chatBackend();
+}
+function backendFor(purpose) {
+  return purpose === 'vision' ? visionBackend() : chatBackend();
+}
+function getLmstudioAutoLoad() {
+  return hostSettings.lmstudioAutoLoad !== false; // default on
+}
+
+// Whether the *chat* runtime is reachable — what the status dot shows.
+async function runtimeReady() {
+  if (getLlmBackend() === 'lmstudio') return (await lmstudio.checkConnection()).connected;
+  return ollamaReady();
+}
 
 // Whether *this app* launched the Ollama process currently serving requests.
 // Only true when we spawned it ourselves (with OLLAMA_MODELS pointed at the
@@ -585,8 +616,14 @@ app.whenReady().then(async () => {
   registerLibraryPdfProtocol();
 
   ollama = new OllamaManager();
+  lmstudio = new LMStudioManager({ getAutoLoad: getLmstudioAutoLoad });
   downloader = new ModelDownloader(ollama, dataDir);
-  mobileServer = new MobileServer(ollama);
+  // The phone server only needs the current model + chatStream, routed to
+  // whichever runtime is active at the time of each request.
+  mobileServer = new MobileServer({
+    getCurrentModel: () => chatBackend().getCurrentModel(),
+    chatStream: (...args) => chatBackend().chatStream(...args),
+  });
   voiceInput = new VoiceInput(getResourcesDir());
   voiceInput.detect();
   library = new Library(ollama, libraryStorageDir);
@@ -598,8 +635,8 @@ app.whenReady().then(async () => {
   downloader.on('error', (data) => win?.webContents.send('pull-error', data));
 
   createWindow();
-  const ready = await ensureOllamaRunning();
-  win?.webContents.send('ollama-status', { ready });
+  await ensureOllamaRunning();
+  win?.webContents.send('ollama-status', { ready: await runtimeReady(), backend: getLlmBackend() });
 });
 
 app.on('window-all-closed', () => {
@@ -646,7 +683,7 @@ ipcMain.handle('chat:rename', (e, { chatId, title }) => {
   return { success: true };
 });
 ipcMain.handle('chat:generate-title', async (e, { model, chatId, text }) => {
-  const title = await ollama.generateTitle(model, text);
+  const title = await chatBackend().generateTitle(model, text);
   if (title) {
     // Only overwrite the default title — if the user renamed the chat
     // manually while this generation was in flight, their name wins.
@@ -672,7 +709,7 @@ ipcMain.handle('chat:send', async (event, { streamId, model, chatId, messages, o
   const userMsg = messages[messages.length - 1];
   getDb().prepare('INSERT INTO messages (chat_id, role, content, created_at) VALUES (?,?,?,?)').run(chatId, userMsg.role, userMsg.content, now);
 
-  await ollama.chatStream({ model, messages, options }, (evt) => {
+  await chatBackend().chatStream({ model, messages, options }, (evt) => {
     event.sender.send('chat-token', { streamId, ...evt });
   });
   return { success: true };
@@ -683,8 +720,9 @@ ipcMain.handle('chat:send', async (event, { streamId, model, chatId, messages, o
 // event pair as chat:send, but deliberately does NOT touch the
 // chats/messages tables. These are one-shot lookups, not saved
 // conversations — nothing here should show up in the chat sidebar.
-ipcMain.handle('utility:stream', async (event, { streamId, model, messages, options }) => {
-  await ollama.chatStream({ model, messages, options }, (evt) => {
+// `purpose: 'vision'` routes to the image-tools runtime (see visionBackend).
+ipcMain.handle('utility:stream', async (event, { streamId, model, messages, options, purpose }) => {
+  await backendFor(purpose).chatStream({ model, messages, options }, (evt) => {
     event.sender.send('chat-token', { streamId, ...evt });
   });
   return { success: true };
@@ -695,7 +733,12 @@ ipcMain.handle('chat:save-assistant-message', (e, { chatId, content }) => {
   return { success: true };
 });
 
-ipcMain.handle('chat:abort', () => ollama.abortGeneration());
+// Both runtimes, since a utility stream may be on the other one (see visionBackend).
+ipcMain.handle('chat:abort', () => {
+  const a = ollama.abortGeneration();
+  const b = lmstudio.abortGeneration();
+  return a || b;
+});
 
 ipcMain.handle('chat:export', async (event, { chatId, title }) => {
   const messages = getDb().prepare('SELECT role, content FROM messages WHERE chat_id = ? ORDER BY id ASC').all(chatId);
@@ -714,12 +757,45 @@ ipcMain.handle('chat:export', async (event, { chatId, title }) => {
 // ---------------------------------------------------------------------------
 // IPC — models
 // ---------------------------------------------------------------------------
-ipcMain.handle('ollama:list-models', () => ollama.getModels());
-ipcMain.handle('ollama:current-model', () => ollama.getCurrentModel());
-ipcMain.handle('ollama:set-model', (e, name) => ollama.setCurrentModel(name));
-ipcMain.handle('ollama:status', async () => ({ ready: await ollamaReady() }));
-ipcMain.handle('ollama:running-models', () => ollama.getRunningModels());
-ipcMain.handle('ollama:model-capabilities', async (e, name) => ollama.getModelCapabilities(name));
+// These route to the active runtime; `purpose: 'vision'` selects the
+// image-tools runtime instead (see visionBackend). The channel names keep
+// their historical "ollama:" prefix.
+ipcMain.handle('ollama:list-models', (e, purpose) => backendFor(purpose).getModels());
+ipcMain.handle('ollama:current-model', () => chatBackend().getCurrentModel());
+ipcMain.handle('ollama:set-model', (e, name) => chatBackend().setCurrentModel(name));
+ipcMain.handle('ollama:status', async () => ({ ready: await runtimeReady(), backend: getLlmBackend() }));
+ipcMain.handle('ollama:running-models', (e, purpose) => backendFor(purpose).getRunningModels());
+ipcMain.handle('ollama:model-capabilities', async (e, name, purpose) => backendFor(purpose).getModelCapabilities(name));
+
+// ---------------------------------------------------------------------------
+// IPC — chat runtime selection (Ollama vs. LM Studio)
+// ---------------------------------------------------------------------------
+async function getBackendSettings() {
+  const lm = await lmstudio.checkConnection();
+  return {
+    backend: getLlmBackend(),
+    visionUseOllama: !!hostSettings.visionUseOllama,
+    lmstudioAutoLoad: getLmstudioAutoLoad(),
+    lmstudio: {
+      reachable: lm.connected,
+      port: lmstudio.getPort(),
+      jitEnabled: lmstudio.getJitEnabled(),
+      loaded: lm.connected ? lm.models.filter((m) => m.loaded).map((m) => m.label) : [],
+      modelCount: lm.connected ? lm.models.length : 0,
+    },
+  };
+}
+ipcMain.handle('backend:get', () => getBackendSettings());
+ipcMain.handle('backend:set', async (e, patch = {}) => {
+  if (patch.backend === 'ollama' || patch.backend === 'lmstudio') hostSettings.llmBackend = patch.backend;
+  if (typeof patch.visionUseOllama === 'boolean') hostSettings.visionUseOllama = patch.visionUseOllama;
+  if (typeof patch.lmstudioAutoLoad === 'boolean') hostSettings.lmstudioAutoLoad = patch.lmstudioAutoLoad;
+  saveHostSettings();
+  // Same event as startup, so the renderer refreshes its model lists and
+  // status dot for the newly selected runtime.
+  win?.webContents.send('ollama-status', { ready: await runtimeReady(), backend: getLlmBackend() });
+  return getBackendSettings();
+});
 
 ipcMain.handle('catalog:list', () => downloader.getCatalog(getSelectedCatalogTiers()));
 // Unfiltered by the GPU-size picker — used by the main chat dropdown as a
@@ -780,7 +856,7 @@ ipcMain.handle('library:delete-upload', (e, id) => library.deleteUpload(id));
 ipcMain.handle('library:read-upload', (e, id) => library.readUpload(id));
 ipcMain.handle('library:search', async (e, { query, embedModel }) => library.search(query, embedModel));
 ipcMain.handle('library:context', async (e, { query, embedModel }) => library.buildContext(query, embedModel));
-ipcMain.handle('library:identify-image', async (e, { model, imageBase64, options }) => ollama.identifyImage(model, imageBase64, options));
+ipcMain.handle('library:identify-image', async (e, { model, imageBase64, options, purpose }) => backendFor(purpose).identifyImage(model, imageBase64, options));
 ipcMain.handle('library:browse', (e, payload) => library.browse(payload));
 ipcMain.handle('library:browse-facets', () => library.browseFacets());
 ipcMain.handle('library:get-doc', (e, id) => library.getDoc(id));
