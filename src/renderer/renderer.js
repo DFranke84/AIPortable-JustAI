@@ -1,4 +1,4 @@
-const state = { chatId: null, model: null, streaming: false, aborting: false, ragEnabled: false, pendingAttachments: [], contextSize: null, keepModelsLoadedOnExit: false };
+const state = { chatId: null, model: null, streaming: false, aborting: false, ragEnabled: false, pendingAttachments: [], contextSize: null, keepModelsLoadedOnExit: false, backend: 'ollama', lmstudioAutoLoad: true };
 
 // Library search always embeds with this model, regardless of whatever chat
 // model is currently selected — every stored doc/chunk embedding is built
@@ -92,6 +92,11 @@ const els = {
   catalogList: document.getElementById('catalog-list'),
   catalogTiersList: document.getElementById('catalog-tiers-list'),
   contextSizeList: document.getElementById('context-size-list'),
+  backendList: document.getElementById('backend-list'),
+  backendLmstudioOptions: document.getElementById('backend-lmstudio-options'),
+  backendLmstudioStatus: document.getElementById('backend-lmstudio-status'),
+  backendLmstudioAutoload: document.getElementById('backend-lmstudio-autoload'),
+  backendVisionOllama: document.getElementById('backend-vision-ollama'),
   catalogFileInfoList: document.getElementById('catalog-file-info-list'),
   modelsLocationInfo: document.getElementById('models-location-info'),
   modelsChooseFolder: document.getElementById('models-choose-folder'),
@@ -329,8 +334,12 @@ async function refreshModels() {
   els.modelSelect.innerHTML = '';
   if (models.length === 0) {
     const opt = document.createElement('option');
-    opt.textContent = 'No models pulled yet — open Tools → Models';
+    opt.textContent = state.backend === 'lmstudio'
+      ? 'No models found in LM Studio — is its local server running?'
+      : 'No models pulled yet — open Tools → Models';
     els.modelSelect.appendChild(opt);
+    els.send.disabled = true;
+    state.model = null;
     return;
   }
   const sorted = sortModelsByCategoryWeight(models, catalog);
@@ -338,10 +347,16 @@ async function refreshModels() {
   for (const m of sorted) {
     const opt = document.createElement('option');
     opt.value = m.name;
-    opt.textContent = modelOptionLabel(m.name, catalog, tiersInPlay);
+    // LM Studio models carry their own display name; Ollama ones are
+    // labeled from the catalog.
+    opt.textContent = m.label || modelOptionLabel(m.name, catalog, tiersInPlay);
     els.modelSelect.appendChild(opt);
   }
-  state.model = sorted[0].name;
+  // Keep the current pick across refreshes (e.g. a runtime switch back and
+  // forth); in LM Studio, otherwise prefer a model that's already loaded.
+  const keep = sorted.find((m) => m.name === state.model) || sorted.find((m) => m.loaded) || sorted[0];
+  state.model = keep.name;
+  els.modelSelect.value = state.model;
   window.localAI.setCurrentModel(state.model);
   els.send.disabled = false;
 }
@@ -500,6 +515,16 @@ els.composer.addEventListener('submit', async (e) => {
     const caps = await window.localAI.getModelCapabilities(state.model);
     if (!caps.vision) {
       await showAppAlert(`"${state.model}" doesn't support image input. Switch to a vision model (e.g. moondream, llava) or remove the attached image(s).`);
+      return;
+    }
+  }
+
+  // LM Studio with auto-load off: the model must already be loaded there.
+  // Checked up front so nothing (chat creation, library lookup) happens first.
+  if (state.backend === 'lmstudio' && !state.lmstudioAutoLoad) {
+    const running = await window.localAI.getRunningModels();
+    if (!running.some((m) => m.name === state.model)) {
+      await showAppAlert(`"${els.modelSelect.selectedOptions[0]?.textContent || state.model}" isn't loaded in LM Studio.\n\nLoad it in LM Studio first, or turn on "Auto-load" in Tools → Models.`);
       return;
     }
   }
@@ -673,9 +698,13 @@ els.composer.addEventListener('submit', async (e) => {
     }
     const tag = document.createElement('div');
     tag.className = 'sources-tag';
-    tag.textContent = state.aborting ? '⏹ Stopped' : `⚠ Generation didn't finish: ${err.message}`;
+    tag.textContent = state.aborting ? '⏹ Stopped' : `⚠ Generation didn't finish: ${ipcErrorText(err)}`;
     assistantBody.parentElement.appendChild(tag);
-    if (!full) assistantBody.parentElement.remove(); // empty bubble, nothing worth keeping on screen
+    // A user Stop with nothing streamed leaves nothing worth showing; a real
+    // failure keeps the (empty) bubble so its warning stays on screen —
+    // removing it here used to make errors like an unloaded/unknown model
+    // vanish without a trace.
+    if (!full && state.aborting) assistantBody.parentElement.remove();
   }
   clearInterval(pendingInterval); // safety net — a zero-token success resolves without ever hitting the two clears above
 
@@ -742,11 +771,25 @@ els.modelSelect.addEventListener('change', () => {
   refreshModelLoadState();
 });
 
-window.localAI.onOllamaStatus(({ ready }) => setStatus(ready));
-function setStatus(ready) {
+window.localAI.onOllamaStatus(({ ready, backend }) => setStatus(ready, backend));
+async function setStatus(ready, backend) {
+  if (backend) state.backend = backend;
+  const lm = state.backend === 'lmstudio';
+  if (lm) state.lmstudioAutoLoad = (await window.localAI.getBackendSettings()).lmstudioAutoLoad;
   els.statusDot.classList.toggle('ready', ready);
-  els.statusText.textContent = ready ? 'Model runtime ready' : 'Model runtime unavailable';
-  if (ready) { refreshModels(); refreshCatalog(); refreshModelLoadState(); }
+  els.statusText.textContent = lm
+    ? (ready ? 'LM Studio connected' : "LM Studio not reachable — start its local server")
+    : (ready ? 'Model runtime ready' : 'Model runtime unavailable');
+  // Refresh the model list either way, so a switch to an unreachable
+  // runtime doesn't leave the previous runtime's models selectable.
+  refreshModels();
+  if (ready) { refreshCatalog(); refreshModelLoadState(); }
+}
+
+// Electron wraps errors thrown in a main-process handler as "Error invoking
+// remote method 'x': Error: <message>" — only <message> is meant for the user.
+function ipcErrorText(err) {
+  return String(err?.message || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
 }
 
 // ============================================================ model load state
@@ -810,14 +853,14 @@ setInterval(refreshModelLoadState, 5000);
 function showTab(name) {
   els.tabs.forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
   els.panels.forEach((p) => p.classList.toggle('active', p.id === `tab-${name}`));
-  if (name === 'models') { refreshModelsLocation(); refreshCatalogTiers(); refreshContextSizeControl(); }
+  if (name === 'models') { refreshBackendControl(); refreshModelsLocation(); refreshCatalogTiers(); refreshContextSizeControl(); }
   if (name === 'library') { refreshUploads(); populateCategorySelect(els.libraryUploadCategory, { allowNew: true }); }
   if (name === 'mobile') { refreshMobileStatus(); }
   if (name === 'system') { refreshSystemInfo(); }
 }
 els.tabs.forEach((t) => t.addEventListener('click', () => showTab(t.dataset.tab)));
 
-els.openTools.onclick = () => { els.toolsOverlay.classList.remove('hidden'); refreshCatalogTiers(); refreshContextSizeControl(); refreshCatalog(); refreshModelsLocation(); };
+els.openTools.onclick = () => { els.toolsOverlay.classList.remove('hidden'); refreshBackendControl(); refreshCatalogTiers(); refreshContextSizeControl(); refreshCatalog(); refreshModelsLocation(); };
 els.closeTools.onclick = () => { els.toolsOverlay.classList.add('hidden'); };
 els.toolsOverlay.addEventListener('click', (e) => { if (e.target === els.toolsOverlay) { els.toolsOverlay.classList.add('hidden'); } });
 
@@ -912,6 +955,61 @@ async function refreshContextSizeControl() {
     els.contextSizeList.appendChild(btn);
   }
 }
+
+// Chat runtime picker (Ollama / LM Studio) plus LM Studio's options and live
+// status. Switching saves the choice per-machine and triggers an
+// ollama-status event, which refreshes the model list and status dot.
+async function refreshBackendControl() {
+  const settings = await window.localAI.getBackendSettings();
+  state.backend = settings.backend;
+  state.lmstudioAutoLoad = settings.lmstudioAutoLoad;
+  els.backendList.innerHTML = '';
+  for (const opt of [{ value: 'ollama', label: 'Ollama' }, { value: 'lmstudio', label: 'LM Studio' }]) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'tier-btn' + (settings.backend === opt.value ? ' active' : '');
+    btn.textContent = opt.label;
+    btn.onclick = async () => {
+      if (state.streaming) { await showAppAlert('Wait for the current reply to finish (or stop it) before switching runtimes.'); return; }
+      await window.localAI.setBackendSettings({ backend: opt.value });
+      refreshBackendControl();
+    };
+    els.backendList.appendChild(btn);
+  }
+
+  const lm = settings.lmstudio;
+  els.backendLmstudioOptions.hidden = settings.backend !== 'lmstudio';
+  els.backendLmstudioAutoload.checked = settings.lmstudioAutoLoad;
+  els.backendVisionOllama.checked = settings.visionUseOllama;
+  const jitText = lm.jitEnabled === true ? 'On — LM Studio swaps models itself'
+    : lm.jitEnabled === false ? 'Off — the app loads models through LM Studio\'s API'
+    : 'Unknown';
+  els.backendLmstudioStatus.innerHTML = '';
+  const rows = [
+    ['LM Studio server', lm.reachable ? `Running on port ${lm.port}` : `Not reachable on port ${lm.port} — start it in LM Studio's Developer tab`],
+    ['Models available', lm.reachable ? String(lm.modelCount) : '—'],
+    ['Loaded now', lm.reachable ? (lm.loaded.join(', ') || 'None — load one in LM Studio, or rely on auto-load') : '—'],
+    ['Just-in-Time loading', jitText],
+    ['Context length', 'Set in LM Studio when the model loads (the setting below applies to Ollama)'],
+  ];
+  for (const [k, v] of rows) {
+    const row = document.createElement('div');
+    row.className = 'row';
+    const a = document.createElement('span');
+    a.textContent = k;
+    const b = document.createElement('span');
+    b.textContent = v;
+    row.append(a, b);
+    els.backendLmstudioStatus.appendChild(row);
+  }
+}
+els.backendLmstudioAutoload.addEventListener('change', async () => {
+  const s = await window.localAI.setBackendSettings({ lmstudioAutoLoad: els.backendLmstudioAutoload.checked });
+  state.lmstudioAutoLoad = s.lmstudioAutoLoad;
+});
+els.backendVisionOllama.addEventListener('change', () => {
+  window.localAI.setBackendSettings({ visionUseOllama: els.backendVisionOllama.checked });
+});
 
 async function refreshCatalog() {
   const [catalog, catalogInfo, installed, downloadStatus] = await Promise.all([
@@ -1316,8 +1414,8 @@ async function handleAnalyzeFile(file) {
 // model). `state` is the calling view's own state object (needs a `.model`
 // field); `elements` names that view's select/no-vision-message/run-button.
 async function populateVisionModels(state, elements) {
-  const [models, catalog] = await Promise.all([window.localAI.listModels(), getMergedCatalog()]);
-  const caps = await Promise.all(models.map((m) => window.localAI.getModelCapabilities(m.name)));
+  const [models, catalog] = await Promise.all([window.localAI.listModels('vision'), getMergedCatalog()]);
+  const caps = await Promise.all(models.map((m) => window.localAI.getModelCapabilities(m.name, 'vision')));
   const visionModels = models.filter((_, i) => caps[i]?.vision);
 
   elements.select.innerHTML = '';
@@ -1379,7 +1477,7 @@ async function runAnalysis() {
     // Same num_ctx the generate call below will use — see the composer
     // handler's identical comment for why a mismatch forces a wasted reload.
     const analyzeCtxOptions = { num_ctx: Math.max(state.contextSize || 0, 16384) };
-    const identified = await window.localAI.libraryIdentifyImage(analyzeState.model, analyzeState.base64, analyzeCtxOptions);
+    const identified = await window.localAI.libraryIdentifyImage(analyzeState.model, analyzeState.base64, analyzeCtxOptions, 'vision');
 
     setAnalyzeStage('Searching the reference library');
     const contextResult = identified
@@ -1430,7 +1528,7 @@ async function runAnalysis() {
     // Without it, Ollama's own default (as little as 4096 tokens on some
     // setups) can't fit the image + injected reference text + a "detailed"
     // response request, which silently degrades instead of erroring.
-    await window.localAI.utilityStream({ streamId, model: analyzeState.model, messages, options: analyzeCtxOptions });
+    await window.localAI.utilityStream({ streamId, model: analyzeState.model, messages, options: analyzeCtxOptions, purpose: 'vision' });
     if (!full) els.analyzeAnswer.textContent = '(No response — the model returned nothing. Try again, or a different model.)';
   } catch (err) {
     els.analyzeAnswer.textContent = err.message === 'Aborted by user' ? 'Cancelled.' : `Couldn't analyze the image: ${err.message}`;
@@ -1582,7 +1680,7 @@ async function runTranslation() {
         els.translateAnswer.textContent = full;
       }
     });
-    await window.localAI.utilityStream({ streamId, model, messages, options });
+    await window.localAI.utilityStream({ streamId, model, messages, options, purpose: translateState.base64 ? 'vision' : undefined });
     if (!full) els.translateAnswer.textContent = '(No response — the model returned nothing. Try again, or a different model.)';
   } catch (err) {
     els.translateAnswer.textContent = err.message === 'Aborted by user' ? 'Cancelled.' : `Couldn't translate: ${err.message}`;
@@ -2024,8 +2122,8 @@ els.composer.addEventListener('drop', async (e) => {
 
 // ============================================================ boot
 (async function init() {
-  const { ready } = await window.localAI.getOllamaStatus();
-  setStatus(ready);
+  const { ready, backend } = await window.localAI.getOllamaStatus();
+  setStatus(ready, backend);
   await refreshChatList();
   state.contextSize = await window.localAI.getContextSize(); // so a chat sent before the Models tab is ever opened still honors it
 })();

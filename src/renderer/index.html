@@ -240,7 +240,31 @@
         </div>
 
         <section id="tab-models" class="tab-panel active">
-          <h4 class="panel-subhead" style="margin-top:0;">Model storage location</h4>
+          <h4 class="panel-subhead" style="margin-top:0;">Chat runtime</h4>
+          <p class="panel-hint">
+            Which program answers chats. Ollama is built in. LM Studio runs models Ollama
+            can't, but you manage them in LM Studio itself: start its local server
+            (Developer tab), and either load a model there or let auto-load below do it.
+            Library search always uses Ollama in the background, whichever you pick.
+          </p>
+          <div id="backend-list" class="tier-select-list"></div>
+          <div id="backend-lmstudio-options" hidden>
+            <div id="backend-lmstudio-status" class="system-info"></div>
+            <label class="settings-checkbox-row">
+              <input type="checkbox" id="backend-lmstudio-autoload" />
+              <span>Auto-load the selected model in LM Studio if it isn't loaded</span>
+            </label>
+            <label class="settings-checkbox-row">
+              <input type="checkbox" id="backend-vision-ollama" />
+              <span>Use Ollama for the image tools (Analyze Image, translating an image)</span>
+            </label>
+            <p class="panel-hint">
+              Images attached in a chat always go to the chat model. Running models in both
+              programs at once splits your GPU's memory between them, which can slow things down.
+            </p>
+          </div>
+
+          <h4 class="panel-subhead">Model storage location</h4>
           <p class="panel-hint">
             Models default to a folder inside this app, so they travel with it on a USB
             drive. If you'd rather keep them on this PC's own (faster) drive, point them
