@@ -28,6 +28,24 @@ function normalizeCategory(raw) {
 // anything plausible.
 const SHORTLIST_SIZE = 40;
 
+// Words too common to help a keyword match.
+const STOPWORDS = new Set(('a an and are as at be but by can do does for from how i if in into is it its me my near no not of on or our should so than that the their them then there these they this to us was we what when where which who why will with you your about any some get have has had just').split(' '));
+
+// Turns a natural-language question into an FTS5 query: the meaningful
+// words OR-ed together (each quoted, so FTS5 operators in the text are
+// inert), with results ranked by BM25 in the SQL. A plain sanitized string
+// would be an implicit AND of every word — "how should I store drinking
+// water" then only matches text containing all seven words, i.e. almost
+// nothing. Returns null when nothing searchable is left.
+function ftsQuery(text) {
+  const words = [...new Set((text || '').toLowerCase().match(/[a-z0-9]+/g) || [])]
+    .filter((w) => w.length > 1 && !STOPWORDS.has(w));
+  return words.length ? words.map((w) => `"${w}"`).join(' OR ') : null;
+}
+
+// Chunks embedded per Ollama request when filling in missing vectors.
+const EMBED_BATCH = 16;
+
 class Library {
   constructor(ollama, storageDir) {
     this.ollama = ollama;
@@ -190,6 +208,8 @@ class Library {
     const db = getDb();
     try {
       if (docIds && docIds.length === 0) return [];
+      const match = ftsQuery(query);
+      if (!match) return [];
       const scope = docIds ? `AND c.doc_id IN (${docIds.map(() => '?').join(',')})` : '';
       return db
         .prepare(`
@@ -198,9 +218,10 @@ class Library {
           FROM library_chunks_fts f
           JOIN library_chunks c ON c.id = f.chunk_id
           WHERE library_chunks_fts MATCH ? ${scope}
+          ORDER BY rank
           LIMIT ?
         `)
-        .all(query.replace(/[^a-zA-Z0-9 ]/g, ' '), ...(docIds || []), limit);
+        .all(match, ...(docIds || []), limit);
     } catch {
       return [];
     }
@@ -214,16 +235,25 @@ class Library {
   // chunks for docs that have actually been shortlisted by docLevelSearch
   // at some point (or genuine user uploads), so it stays naturally bounded
   // rather than growing to cover every bulk-imported doc.
+  // Batched (EMBED_BATCH chunks per Ollama request) — a newly shortlisted
+  // long document can bring in dozens of chunks at once, and one round trip
+  // per chunk made the first search touching it take many seconds.
   async ensureChunksEmbedded(embedModel) {
     const db = getDb();
-    const chunks = db.prepare('SELECT id, text FROM library_chunks').all();
-    const have = new Set(db.prepare('SELECT chunk_id FROM library_chunk_embeddings').all().map((r) => r.chunk_id));
-    for (const chunk of chunks) {
-      if (have.has(chunk.id)) continue;
-      const vec = await this.ollama.embed(embedModel, chunk.text);
-      if (!vec) continue;
-      const buf = Buffer.from(new Float32Array(vec).buffer);
-      db.prepare('INSERT OR REPLACE INTO library_chunk_embeddings (chunk_id, vector, dims) VALUES (?,?,?)').run(chunk.id, buf, vec.length);
+    const missing = db.prepare(`
+      SELECT c.id, c.text FROM library_chunks c
+      WHERE NOT EXISTS (SELECT 1 FROM library_chunk_embeddings e WHERE e.chunk_id = c.id)
+    `).all();
+    const insert = db.prepare('INSERT OR REPLACE INTO library_chunk_embeddings (chunk_id, vector, dims) VALUES (?,?,?)');
+    for (let i = 0; i < missing.length; i += EMBED_BATCH) {
+      const batch = missing.slice(i, i + EMBED_BATCH);
+      const vecs = await this.ollama.embedMany(embedModel, batch.map((c) => c.text));
+      if (!vecs) continue;
+      db.transaction(() => {
+        batch.forEach((c, j) => {
+          if (vecs[j]) insert.run(c.id, Buffer.from(new Float32Array(vecs[j]).buffer), vecs[j].length);
+        });
+      })();
     }
   }
 
@@ -270,7 +300,7 @@ class Library {
       .map((chunkId) => {
         const row = db
           .prepare(`
-            SELECT c.id AS chunk_id, c.doc_id, c.chunk_index, c.text, d.title
+            SELECT c.id AS chunk_id, c.doc_id, c.chunk_index, c.text, d.title, d.source
             FROM library_chunks c
             JOIN library_docs d ON d.id = c.doc_id
             WHERE c.id = ?
@@ -283,6 +313,7 @@ class Library {
           docId: row.doc_id,
           chunkIndex: row.chunk_index,
           title: row.title,
+          source: row.source,
           text: row.text,
           preview: kwHit?.preview || row.text.slice(0, 160),
         };
@@ -301,12 +332,15 @@ class Library {
 
     let kw = [];
     try {
-      kw = db
-        .prepare(`
-          SELECT doc_id FROM library_docs_fts WHERE library_docs_fts MATCH ? LIMIT ?
-        `)
-        .all(query.replace(/[^a-zA-Z0-9 ]/g, ' '), Math.max(limit, 40));
-    } catch { /* raw query may not be valid FTS syntax even after sanitizing */ }
+      const match = ftsQuery(query);
+      if (match) {
+        kw = db
+          .prepare(`
+            SELECT doc_id FROM library_docs_fts WHERE library_docs_fts MATCH ? ORDER BY rank LIMIT ?
+          `)
+          .all(match, Math.max(limit, 40));
+      }
+    } catch { /* malformed FTS query — fall back to semantic only */ }
 
     let sem = [];
     try {
@@ -377,8 +411,13 @@ class Library {
           AND NOT EXISTS (SELECT 1 FROM library_chunks c WHERE c.doc_id = d.id)
       `)
       .all(...docIds);
+    // Linked Research docs keep their FTS row at the doc's own rowid (see
+    // researchSync.js), which is an indexed lookup; the doc_id scan is the
+    // fallback for everything else.
+    const byRowid = db.prepare('SELECT f.body FROM library_docs d JOIN library_docs_fts f ON f.rowid = d.rowid AND f.doc_id = d.id WHERE d.id = ?');
+    const byDocId = db.prepare('SELECT body FROM library_docs_fts WHERE doc_id = ?');
     for (const { id } of unchunked) {
-      const ftsRow = db.prepare('SELECT body FROM library_docs_fts WHERE doc_id = ?').get(id);
+      const ftsRow = byRowid.get(id) || byDocId.get(id);
       if (ftsRow?.body) this.insertChunks(id, ftsRow.body);
     }
     if (unchunked.length) {
@@ -398,7 +437,9 @@ class Library {
     const clauses = [];
     const params = [];
     if (category) { clauses.push('d.category = ?'); params.push(category); }
-    if (source) { clauses.push('d.source = ?'); params.push(source); }
+    // '__local__' = the user's own uploads, which carry no source value.
+    if (source === '__local__') clauses.push('d.source IS NULL');
+    else if (source) { clauses.push('d.source = ?'); params.push(source); }
     if (search) { clauses.push('d.title LIKE ?'); params.push(`%${search}%`); }
     if (cursor) { clauses.push('d.rowid > ?'); params.push(cursor); }
     const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
@@ -406,7 +447,7 @@ class Library {
     const rows = db
       .prepare(`
         SELECT d.rowid AS rowid, d.id, d.title, d.category, d.source, d.source_url, d.license, d.word_count,
-               d.pdf_filename,
+               d.pdf_filename, d.ext_path, d.ext_original, d.external_id, d.ext,
                (SELECT COUNT(*) FROM library_doc_images i WHERE i.doc_id = d.id) AS imageCount
         FROM library_docs d
         ${where}
@@ -448,6 +489,65 @@ class Library {
     return { ...doc, body: ftsRow?.body || '', images };
   }
 
+  // ---- bulk removal / reset ---------------------------------------------
+  // Deletes every library row belonging to the docs matched by `docWhere`
+  // (a WHERE clause over library_docs aliased as d) — chunks, both FTS
+  // tables, embeddings, image rows and the docs themselves — in one
+  // transaction. Set-based rather than per-doc, since the FTS doc_id columns
+  // are UNINDEXED (a per-doc delete is a full scan each time).
+  deleteDocsWhere(docWhere, params = []) {
+    const db = getDb();
+    const ids = `SELECT d.id FROM library_docs d WHERE ${docWhere}`;
+    const run = db.transaction(() => {
+      db.prepare(`DELETE FROM library_chunk_embeddings WHERE chunk_id IN (SELECT c.id FROM library_chunks c WHERE c.doc_id IN (${ids}))`).run(...params);
+      db.prepare(`DELETE FROM library_chunks_fts WHERE doc_id IN (${ids})`).run(...params);
+      db.prepare(`DELETE FROM library_chunks WHERE doc_id IN (${ids})`).run(...params);
+      db.prepare(`DELETE FROM library_docs_fts WHERE doc_id IN (${ids})`).run(...params);
+      db.prepare(`DELETE FROM library_doc_embeddings WHERE doc_id IN (${ids})`).run(...params);
+      db.prepare(`DELETE FROM library_doc_images WHERE doc_id IN (${ids})`).run(...params);
+      return db.prepare(`DELETE FROM library_docs WHERE id IN (${ids})`).run(...params).changes;
+    });
+    const removed = run();
+    this.invalidateDocVectors();
+    return removed;
+  }
+
+  // Wipes every library table (uploads, linked Research docs, imports).
+  // Files under storageDir are the caller's job (main.js sends them to the
+  // Recycle Bin), since that needs Electron's shell.
+  clearAll() {
+    const db = getDb();
+    db.transaction(() => {
+      for (const t of ['library_chunk_embeddings', 'library_chunks_fts', 'library_chunks', 'library_docs_fts', 'library_doc_embeddings', 'library_doc_images', 'library_docs', 'library_meta']) {
+        db.prepare(`DELETE FROM ${t}`).run();
+      }
+    })();
+    this.invalidateDocVectors();
+  }
+
+  // The whole-doc vector cache is built once per session (see constructor);
+  // anything that adds/removes doc embeddings must drop it.
+  invalidateDocVectors() {
+    this._docVectorCache = null;
+  }
+
+  // FTS5 keeps deleted rows' index segments until it's told to rebuild, so
+  // after a big removal (a reset) VACUUM alone wouldn't shrink library.db.
+  // Rebuilding from the (now smaller) content tables drops them.
+  compactSearchIndex() {
+    const db = getDb();
+    db.prepare("INSERT INTO library_docs_fts(library_docs_fts) VALUES('rebuild')").run();
+    db.prepare("INSERT INTO library_chunks_fts(library_chunks_fts) VALUES('rebuild')").run();
+  }
+
+  getMeta(key) {
+    return getDb().prepare('SELECT value FROM library_meta WHERE key = ?').get(key)?.value ?? null;
+  }
+
+  setMeta(key, value) {
+    getDb().prepare('INSERT OR REPLACE INTO library_meta (key, value) VALUES (?, ?)').run(key, value == null ? null : String(value));
+  }
+
   // ---- RAG: build chat context from the top matches -------------------
   // Returns { text, sources }. Multiple matching chunks from the same doc
   // are merged into one block (ordered by position in the doc) instead of
@@ -460,7 +560,7 @@ class Library {
 
     const byDoc = new Map();
     for (const r of results) {
-      if (!byDoc.has(r.docId)) byDoc.set(r.docId, { title: r.title, chunks: [] });
+      if (!byDoc.has(r.docId)) byDoc.set(r.docId, { title: r.title, source: r.source, chunks: [] });
       byDoc.get(r.docId).chunks.push(r);
     }
 
@@ -470,7 +570,7 @@ class Library {
       group.chunks.sort((a, b) => a.chunkIndex - b.chunkIndex);
       const body = group.chunks.map((c) => c.text).join('\n…\n').slice(0, maxCharsPerDoc);
       parts.push(`### ${group.title}\n${body}`);
-      sources.push({ id: docId, title: group.title });
+      sources.push({ id: docId, title: group.title, kind: group.source === 'research' ? 'research' : 'local' });
     }
     return { text: parts.join('\n\n---\n\n'), sources };
   }

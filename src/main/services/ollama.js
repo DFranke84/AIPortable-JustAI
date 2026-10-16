@@ -262,6 +262,18 @@ class OllamaManager {
     }
   }
 
+  // Several texts in one request (the Research sync embeds thousands of
+  // docs — one HTTP round trip per doc would dominate the run time).
+  // Returns an array parallel to `texts`, or null if the request failed.
+  async embedMany(model, texts) {
+    try {
+      const res = await request('/api/embed', { method: 'POST', body: { model, input: texts, keep_alive: -1 } });
+      return Array.isArray(res.embeddings) && res.embeddings.length === texts.length ? res.embeddings : null;
+    } catch {
+      return null;
+    }
+  }
+
   async embed(model, text) {
     try {
       const res = await request('/api/embed', { method: 'POST', body: { model, input: [text], keep_alive: -1 } });

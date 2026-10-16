@@ -87,6 +87,17 @@ contextBridge.exposeInMainWorld('localAI', {
   libraryBrowseFacets: () => ipcRenderer.invoke('library:browse-facets'),
   libraryGetDoc: (id) => ipcRenderer.invoke('library:get-doc', id),
   libraryOpenPdf: (id) => ipcRenderer.invoke('library:open-pdf', id),
+  libraryReset: (scope) => ipcRenderer.invoke('library:reset', { scope }),
+
+  // -- Research library link (indexed in place, never copied) ----------------
+  researchStatus: () => ipcRenderer.invoke('research:status'),
+  researchSync: (embedModel, onlyPrefixes) => ipcRenderer.invoke('research:sync', { embedModel, onlyPrefixes }),
+  researchPause: () => ipcRenderer.invoke('research:pause'),
+  researchDismissNotice: () => ipcRenderer.invoke('research:dismiss-notice'),
+  researchReadDoc: (id) => ipcRenderer.invoke('research:read-doc', id),
+  researchOpenFile: (relPath) => ipcRenderer.invoke('research:open-file', relPath),
+  researchChooseRoot: () => ipcRenderer.invoke('research:choose-root'),
+  onResearchSyncProgress: (cb) => on('research-sync-progress', cb),
 
   // -- chat attachments -----------------------------------------------------
   processAttachment: (payload) => ipcRenderer.invoke('attachment:process', payload),

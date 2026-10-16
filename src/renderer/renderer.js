@@ -39,6 +39,7 @@ const els = {
   appModalCheckboxRow: document.getElementById('app-modal-checkbox-row'),
   appModalCheckbox: document.getElementById('app-modal-checkbox'),
   appModalCheckboxLabel: document.getElementById('app-modal-checkbox-label'),
+  appModalInput: document.getElementById('app-modal-input'),
 
   openTools: document.getElementById('open-tools'),
   closeTools: document.getElementById('close-tools'),
@@ -112,6 +113,17 @@ const els = {
   librarySearchBtn: document.getElementById('library-search-btn'),
   libraryResults: document.getElementById('library-results'),
   libraryUploads: document.getElementById('library-uploads'),
+  researchStatus: document.getElementById('research-status'),
+  researchProgress: document.getElementById('research-progress'),
+  researchSyncBtn: document.getElementById('research-sync-btn'),
+  researchPauseBtn: document.getElementById('research-pause-btn'),
+  researchChooseBtn: document.getElementById('research-choose-btn'),
+  researchRemoveBtn: document.getElementById('research-remove-btn'),
+  libraryResetBtn: document.getElementById('library-reset-btn'),
+  researchNotice: document.getElementById('research-notice'),
+  researchNoticeText: document.getElementById('research-notice-text'),
+  researchNoticeSync: document.getElementById('research-notice-sync'),
+  researchNoticeDismiss: document.getElementById('research-notice-dismiss'),
 
   browserListView: document.getElementById('browser-list-view'),
   browserDocView: document.getElementById('browser-doc-view'),
@@ -171,9 +183,15 @@ let modalKeyHandler = null;
 // was passed (undefined otherwise). showAppAlert/showAppConfirm below unwrap
 // this to a plain boolean for the common case; callers that need the
 // checkbox (the exit-confirmation dialog) use showAppModal directly.
-function showAppModal(message, { cancel = false, okText = 'OK', cancelText = 'Cancel', checkboxLabel = null, checkboxChecked = false } = {}) {
+// `inputPlaceholder`, when given, shows a one-line text box (its value comes
+// back as `value`) — used for "type RESET to confirm".
+function showAppModal(message, { cancel = false, okText = 'OK', cancelText = 'Cancel', checkboxLabel = null, checkboxChecked = false, inputPlaceholder = null } = {}) {
   return new Promise((resolve) => {
     els.appModalMessage.textContent = message;
+    const hasInput = inputPlaceholder !== null;
+    els.appModalInput.classList.toggle('hidden', !hasInput);
+    els.appModalInput.value = '';
+    els.appModalInput.placeholder = inputPlaceholder || '';
     els.appModalOk.textContent = okText;
     els.appModalCancel.classList.toggle('hidden', !cancel);
     els.appModalCancel.textContent = cancelText;
@@ -184,16 +202,17 @@ function showAppModal(message, { cancel = false, okText = 'OK', cancelText = 'Ca
       els.appModalCheckbox.checked = checkboxChecked;
     }
     els.appModalOverlay.classList.remove('hidden');
-    els.appModalOk.focus();
+    (hasInput ? els.appModalInput : els.appModalOk).focus();
 
     const finish = (ok) => {
       const checked = hasCheckbox ? els.appModalCheckbox.checked : undefined;
+      const value = hasInput ? els.appModalInput.value : undefined;
       els.appModalOverlay.classList.add('hidden');
       els.appModalOk.onclick = null;
       els.appModalCancel.onclick = null;
       document.removeEventListener('keydown', modalKeyHandler);
       modalKeyHandler = null;
-      resolve({ ok, checked });
+      resolve({ ok, checked, value });
     };
     els.appModalOk.onclick = () => finish(true);
     els.appModalCancel.onclick = () => finish(false);
@@ -589,7 +608,11 @@ els.composer.addEventListener('submit', async (e) => {
     const tag = document.createElement('div');
     tag.className = 'sources-tag';
     const prefix = identifiedAs ? `Identified as "${identifiedAs}" — using: ` : 'Using: ';
-    tag.textContent = prefix + contextResult.sources.map((s) => s.title).join(', ');
+    tag.append(prefix);
+    contextResult.sources.forEach((s, i) => {
+      if (i) tag.append(', ');
+      tag.appendChild(sourceLink(s));
+    });
     assistantBody.parentElement.insertBefore(tag, assistantBody);
   }
   let full = '';
@@ -854,7 +877,7 @@ function showTab(name) {
   els.tabs.forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
   els.panels.forEach((p) => p.classList.toggle('active', p.id === `tab-${name}`));
   if (name === 'models') { refreshBackendControl(); refreshModelsLocation(); refreshCatalogTiers(); refreshContextSizeControl(); }
-  if (name === 'library') { refreshUploads(); populateCategorySelect(els.libraryUploadCategory, { allowNew: true }); }
+  if (name === 'library') { refreshUploads(); populateCategorySelect(els.libraryUploadCategory, { allowNew: true }); refreshResearchStatus(); }
   if (name === 'mobile') { refreshMobileStatus(); }
   if (name === 'system') { refreshSystemInfo(); }
 }
@@ -1123,6 +1146,23 @@ window.localAI.onPullComplete(() => { refreshCatalog(); refreshModels(); });
 
 // ---- library --------------------------------------------------------------
 
+// One cited document under a reply (or in a search result): a Local/Research
+// badge plus the title, clickable to open it in the Reference Library.
+function sourceLink({ id, title, kind }) {
+  const a = document.createElement('span');
+  a.className = 'src-link';
+  a.title = kind === 'research' ? 'Linked from your Research library — click to read it' : 'One of your own uploads — click to read it';
+  const badge = document.createElement('span');
+  badge.className = `src-badge ${kind === 'research' ? 'research' : 'local'}`;
+  badge.textContent = kind === 'research' ? 'Research' : 'Local';
+  a.append(badge, title);
+  a.onclick = async () => {
+    showMainView('library');
+    await openBrowserDoc(id);
+  };
+  return a;
+}
+
 // "home-repair" -> "Home-Repair" — used anywhere a raw category value (the DB/
 // filter form, all-lowercase-hyphenated) is shown to the user. The raw form
 // stays what's stored/filtered on; this is purely a display transform.
@@ -1221,7 +1261,8 @@ async function runLibrarySearch() {
   for (const r of results) {
     const item = document.createElement('div');
     item.className = 'library-item';
-    item.innerHTML = `<div class="row"><strong>${r.title}</strong> <span class="meta">part ${r.chunkIndex + 1}</span></div><div class="desc">${r.preview || ''}</div>`;
+    item.innerHTML = `<div class="row"><strong></strong> <span class="meta">part ${r.chunkIndex + 1}</span></div><div class="desc">${r.preview || ''}</div>`;
+    item.querySelector('strong').appendChild(sourceLink({ id: r.docId, title: r.title, kind: r.source === 'research' ? 'research' : 'local' }));
     els.libraryResults.appendChild(item);
   }
 }
@@ -1237,9 +1278,14 @@ const browserState = { cursor: null, category: '', source: '', search: '', facet
 
 async function initLibraryBrowser() {
   if (!browserState.facetsLoaded) {
-    await populateCategorySelect(els.browserCategory);
+    await populateCategorySelect(els.browserCategory); // replaces its own previous options
     const { sources } = await window.localAI.libraryBrowseFacets();
-    for (const s of sources) els.browserSource.appendChild(new Option(s, s));
+    els.browserSource.querySelectorAll('option[data-source]').forEach((o) => o.remove());
+    for (const s of sources) {
+      const opt = new Option(s === 'research' ? 'Research (linked)' : s, s);
+      opt.dataset.source = '1';
+      els.browserSource.appendChild(opt);
+    }
     browserState.facetsLoaded = true;
   }
   showBrowserListView();
@@ -1268,7 +1314,7 @@ async function runBrowserSearch({ reset = false } = {}) {
   for (const doc of items) {
     const item = document.createElement('div');
     item.className = 'library-item browser-result';
-    const meta = [doc.category ? formatCategoryLabel(doc.category) : null, doc.source, doc.word_count ? `${doc.word_count.toLocaleString()} words` : null, doc.imageCount ? `${doc.imageCount} image${doc.imageCount === 1 ? '' : 's'}` : null, doc.pdf_filename ? '📄 PDF' : null]
+    const meta = [doc.category ? formatCategoryLabel(doc.category) : null, doc.source === 'research' ? 'Research (linked)' : doc.source || 'Local upload', doc.word_count ? `${doc.word_count.toLocaleString()} words` : null, doc.imageCount ? `${doc.imageCount} image${doc.imageCount === 1 ? '' : 's'}` : null, doc.pdf_filename || /\.pdf$/i.test(doc.ext_original || '') ? '📄 PDF' : null]
       .filter(Boolean)
       .join(' · ');
     item.innerHTML = `<div class="row"><strong>${doc.title}</strong></div><div class="meta">${meta}</div>`;
@@ -1314,23 +1360,42 @@ async function showBrowserPdfView(pdfUrl) {
 async function openBrowserDoc(id) {
   const doc = await window.localAI.libraryGetDoc(id);
   if (!doc) return;
+  const isResearch = doc.source === 'research';
+  const isUpload = doc.external_id === null;
   els.browserListView.hidden = true;
   els.browserDocView.hidden = false;
   els.browserDocTitle.textContent = doc.title;
-  const metaParts = [doc.category ? formatCategoryLabel(doc.category) : null, doc.source, doc.license].filter(Boolean).join(' · ');
-  els.browserDocMeta.innerHTML = metaParts + (doc.source_url ? ` · <a href="${doc.source_url}" target="_blank" rel="noopener">source</a>` : '');
+  const where = isResearch ? `Research library: ${doc.ext_path}` : isUpload ? 'Local upload (stored in this app)' : null;
+  const metaParts = [doc.category ? formatCategoryLabel(doc.category) : null, where, !isResearch && !isUpload ? doc.source : null, doc.license].filter(Boolean).join(' · ');
+  els.browserDocMeta.innerHTML = '';
+  els.browserDocMeta.append(metaParts);
+  if (doc.source_url) {
+    const link = document.createElement('a');
+    link.href = doc.source_url;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.textContent = 'source';
+    els.browserDocMeta.append(' · ', link);
+  }
 
-  els.browserPdfControls.hidden = !doc.pdf_filename;
+  // Original file: an imported scan (libpdf://), a linked Research doc's
+  // original read in place (research://), or the user's own uploaded file
+  // (system viewer only).
+  let pdfUrl = null;
+  if (doc.pdf_filename) pdfUrl = `libpdf://${encodeURIComponent(doc.pdf_filename)}`;
+  else if (isResearch && /\.pdf$/i.test(doc.ext_original || '')) pdfUrl = researchUrl(doc.ext_original);
+  const hasOriginal = !!(doc.pdf_filename || (isResearch && doc.ext_original) || (isUpload && doc.filename));
+  els.browserPdfControls.hidden = !hasOriginal;
   showBrowserTextView();
-  if (doc.pdf_filename) {
-    const pdfUrl = `libpdf://${encodeURIComponent(doc.pdf_filename)}`;
+  els.browserViewPdfBtn.hidden = !pdfUrl;
+  if (pdfUrl) {
     els.browserViewPdfBtn.onclick = () => showBrowserPdfView(pdfUrl);
     els.browserViewTextBtn.onclick = () => showBrowserTextView();
-    els.browserOpenPdfBtn.onclick = async () => {
-      const res = await window.localAI.libraryOpenPdf(id);
-      if (!res.ok) await showAppAlert(res.error || 'Could not open the PDF.');
-    };
   }
+  els.browserOpenPdfBtn.onclick = async () => {
+    const res = await window.localAI.libraryOpenPdf(id);
+    if (!res.ok) await showAppAlert(res.error || 'Could not open the file.');
+  };
 
   els.browserDocImages.innerHTML = '';
   for (const img of doc.images || []) {
@@ -1339,8 +1404,161 @@ async function openBrowserDoc(id) {
     el.loading = 'lazy';
     els.browserDocImages.appendChild(el);
   }
+
+  if (isResearch) {
+    // Read the page live from the Research folder (images and all); fall
+    // back to the indexed text if the folder isn't reachable right now.
+    const live = await window.localAI.researchReadDoc(id);
+    if (live.ok) {
+      els.browserDocBody.innerHTML = window.marked ? window.marked.parse(live.body) : `<pre>${live.body}</pre>`;
+      rewriteResearchLinks(els.browserDocBody, live.dir);
+      return;
+    }
+    els.browserDocBody.innerHTML = '';
+    const note = document.createElement('p');
+    note.className = 'panel-hint';
+    note.textContent = `${live.error} Showing the indexed text instead.`;
+    els.browserDocBody.appendChild(note);
+    els.browserDocBody.insertAdjacentHTML('beforeend', window.marked ? window.marked.parse(doc.body || '') : `<pre>${doc.body || ''}</pre>`);
+    return;
+  }
   els.browserDocBody.innerHTML = window.marked ? window.marked.parse(doc.body || '') : `<pre>${doc.body || ''}</pre>`;
 }
+
+// research://root/<path> for a path relative to the Research folder.
+function researchUrl(relPath) {
+  return 'research://root/' + relPath.split('/').map(encodeURIComponent).join('/');
+}
+
+// A Research page's images and file links are relative to its own folder —
+// point images at research:// (served read-only from the Research folder)
+// and make file links (e.g. a PDF report) open in the system viewer.
+function rewriteResearchLinks(container, dir) {
+  const base = new URL(researchUrl(dir && dir !== '.' ? `${dir}/` : ''));
+  const isRelative = (v) => v && !/^[a-z][a-z0-9+.-]*:/i.test(v) && !v.startsWith('#');
+  container.querySelectorAll('img[src]').forEach((img) => {
+    const src = img.getAttribute('src');
+    if (isRelative(src)) img.src = new URL(src, base).href;
+    img.loading = 'lazy';
+  });
+  container.querySelectorAll('a[href]').forEach((a) => {
+    const href = a.getAttribute('href');
+    if (isRelative(href)) {
+      const rel = decodeURIComponent(new URL(href, base).pathname).replace(/^\/+/, '');
+      a.href = '#';
+      a.title = 'Open from the Research library';
+      a.onclick = async (e) => {
+        e.preventDefault();
+        const res = await window.localAI.researchOpenFile(rel);
+        if (!res.ok) await showAppAlert(res.error);
+      };
+    } else if (/^https?:/i.test(href)) {
+      a.target = '_blank';
+      a.rel = 'noopener';
+    }
+  });
+}
+
+// ---- Research library link (Tools/Settings → Library) ----------------------
+function describeResearchStatus(st) {
+  if (!st.connected) return 'Research library not connected — use "Change folder…" to point at it. Already-indexed text still answers questions.';
+  const parts = [`Connected: ${st.root}`, `${st.docs.toLocaleString()} pages indexed`];
+  if (st.docs) parts.push(`${st.embedded.toLocaleString()} with search vectors`);
+  if (st.lastSync) parts.push(`last sync ${new Date(st.lastSync).toLocaleString()}`);
+  if (st.catalogChanged) parts.push(st.docs ? 'new or changed items waiting — Sync to bring them in' : 'not synced yet');
+  return parts.join(' · ');
+}
+
+async function refreshResearchStatus() {
+  const st = await window.localAI.researchStatus();
+  els.researchStatus.textContent = describeResearchStatus(st);
+  setResearchRunning(st.running);
+  if (st.progress && st.running) els.researchProgress.textContent = st.progress.message || '';
+  return st;
+}
+
+function setResearchRunning(running) {
+  els.researchSyncBtn.disabled = running;
+  els.researchPauseBtn.hidden = !running;
+  els.researchRemoveBtn.disabled = running;
+  els.libraryResetBtn.disabled = running;
+}
+
+async function startResearchSync() {
+  const { started } = await window.localAI.researchSync(LIBRARY_EMBED_MODEL);
+  if (!started) {
+    await showAppAlert('Couldn\'t start the sync — either one is already running or the Research folder isn\'t connected.');
+    return;
+  }
+  els.researchNotice.classList.add('hidden');
+  setResearchRunning(true);
+}
+
+els.researchSyncBtn.onclick = startResearchSync;
+els.researchPauseBtn.onclick = () => window.localAI.researchPause();
+els.researchChooseBtn.onclick = async () => {
+  const res = await window.localAI.researchChooseRoot();
+  if (!res.ok && !res.canceled) await showAppAlert(res.error);
+  refreshResearchStatus();
+};
+
+window.localAI.onResearchSyncProgress((p) => {
+  els.researchProgress.textContent = p.message || '';
+  setResearchRunning(!!p.running);
+  if (!p.running) {
+    refreshResearchStatus();
+    if (p.result) {
+      const r = p.result;
+      els.researchProgress.textContent = `${p.message} Added ${r.added}, updated ${r.updated}, removed ${r.removed}, unchanged ${r.unchanged}` +
+        (r.missing ? `, ${r.missing} listed in the catalog but missing on disk` : '') +
+        (r.embedFailed ? ` · ${r.embedFailed} couldn't get search vectors (is nomic-embed-text installed?)` : '') + '.';
+    }
+    browserState.facetsLoaded = false; // pick up new categories/sources in the Reference Library filters
+  }
+});
+
+// Typed confirmation for anything that wipes index data.
+async function confirmTyped(message) {
+  const { ok, value } = await showAppModal(`${message}\n\nType RESET to confirm.`, { cancel: true, okText: 'Reset', inputPlaceholder: 'RESET' });
+  return ok && (value || '').trim() === 'RESET';
+}
+
+async function runLibraryReset(scope) {
+  const res = await window.localAI.libraryReset(scope);
+  if (!res.ok) { await showAppAlert(res.error); return; }
+  browserState.facetsLoaded = false;
+  refreshUploads();
+  refreshResearchStatus();
+  populateCategorySelect(els.libraryUploadCategory, { allowNew: true });
+  const trashNote = res.trashFailed?.length ? `\n\nCouldn't move to the Recycle Bin: ${res.trashFailed.join(', ')}` : '';
+  await showAppAlert(`Done — removed ${res.removed.toLocaleString()} document(s).\nA backup of the old library was saved as:\n${res.backupPath}${trashNote}`);
+}
+
+els.researchRemoveBtn.onclick = async () => {
+  if (!(await confirmTyped('Remove the Research library from the AI\'s index?\n\nYour own uploads stay. Nothing in the Research folder is changed — you can Sync again any time.'))) return;
+  runLibraryReset('research');
+};
+els.libraryResetBtn.onclick = async () => {
+  if (!(await confirmTyped('Reset the ENTIRE library?\n\nThis empties the index (your uploads and the Research link) and moves the app\'s own copied files in data\\library to the Recycle Bin. A backup of library.db is saved first. Chats and the Research folder are not touched.'))) return;
+  runLibraryReset('all');
+};
+
+// Startup: if Research has new/changed items since the last sync, offer a
+// sync (never runs one on its own). "Not now" hides it until the catalog
+// changes again.
+async function checkResearchNotice() {
+  const st = await window.localAI.researchStatus();
+  if (!st.connected || st.running || !st.catalogChanged || st.noticeDismissed) return;
+  els.researchNoticeText.textContent = st.docs
+    ? '📚 Your Research library has new or changed items since the last sync.'
+    : '📚 Research library found — sync it so the AI can search it (pages stay where they are; nothing is copied).';
+  els.researchNotice.classList.remove('hidden');
+}
+els.researchNoticeSync.onclick = startResearchSync;
+els.researchNoticeDismiss.onclick = async () => {
+  els.researchNotice.classList.add('hidden');
+  await window.localAI.researchDismissNotice();
+};
 
 els.browserSearchBtn.onclick = () => runBrowserSearch({ reset: true });
 els.browserQuery.addEventListener('keydown', (e) => {
@@ -2126,4 +2344,5 @@ els.composer.addEventListener('drop', async (e) => {
   setStatus(ready, backend);
   await refreshChatList();
   state.contextSize = await window.localAI.getContextSize(); // so a chat sent before the Models tab is ever opened still honors it
+  checkResearchNotice();
 })();

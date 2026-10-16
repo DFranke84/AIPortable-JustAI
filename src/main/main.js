@@ -12,6 +12,7 @@ const { ModelDownloader, TIERS: CATALOG_TIERS } = require('./services/modelCatal
 const { MobileServer } = require('./services/mobileServer');
 const { VoiceInput } = require('./services/voiceInput');
 const { Library } = require('./services/library');
+const { ResearchSync } = require('./services/researchSync');
 const { extractText } = require('./services/textExtract');
 const { syncModels } = require('./services/modelSync');
 
@@ -146,6 +147,19 @@ function getContextSize() {
   return CONTEXT_SIZE_PRESETS.includes(saved) ? saved : null;
 }
 
+// The separate Research library (E:\Research) that the AI indexes in place —
+// also a host setting, since drive letters are a property of the machine.
+// Order: the folder the user picked (if it still exists), a "Research"
+// folder beside the app folder (E:\AIPortable-JustAI -> E:\Research, so it
+// follows the drive letter), then E:\Research. null = not connected.
+function getResearchRoot() {
+  const candidates = [hostSettings.researchRoot, path.join(portableRoot, '..', 'Research'), 'E:\\Research'].filter(Boolean);
+  for (const c of candidates) {
+    if (fs.existsSync(path.join(c, 'CATALOG.json'))) return path.resolve(c);
+  }
+  return null;
+}
+
 function findBundledOllama() {
   const platDir = process.platform === 'win32' ? 'win' : process.platform === 'darwin' ? 'mac' : 'linux';
   const exe = process.platform === 'win32' ? 'ollama.exe' : 'ollama';
@@ -160,13 +174,14 @@ function findBundledOllama() {
 protocol.registerSchemesAsPrivileged([
   { scheme: 'libimg', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
   { scheme: 'libpdf', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
+  { scheme: 'research', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
 ]);
 
 // ---------------------------------------------------------------------------
 // Services (instantiated once app is ready)
 // ---------------------------------------------------------------------------
 let ollamaProcess = null;
-let ollama, lmstudio, downloader, mobileServer, voiceInput, library;
+let ollama, lmstudio, downloader, mobileServer, voiceInput, library, researchSync;
 
 // Which runtime answers chats: 'ollama' (default) or 'lmstudio'. Ollama is
 // started either way — library search embeddings always use its
@@ -569,39 +584,71 @@ function registerLibraryPdfProtocol() {
       const relPath = decodeURIComponent(u.hostname + u.pathname).replace(/^\/+/, '');
       const filePath = path.join(pdfsRoot, relPath);
       if (!filePath.startsWith(pdfsRoot) || !fs.existsSync(filePath)) return new Response('not found', { status: 404 });
+      return serveFile(filePath, request);
+    } catch (err) {
+      return new Response('error: ' + err.message, { status: 500 });
+    }
+  });
+}
 
-      const stat = fs.statSync(filePath);
-      const range = request.headers.get('range');
+const CONTENT_TYPES = {
+  '.pdf': 'application/pdf', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif',
+  '.webp': 'image/webp', '.svg': 'image/svg+xml', '.bmp': 'image/bmp', '.mp4': 'video/mp4', '.mp3': 'audio/mpeg',
+};
 
-      if (range) {
-        const match = /bytes=(\d+)-(\d*)/.exec(range);
-        if (!match) return new Response('bad range', { status: 416 });
-        const start = parseInt(match[1], 10);
-        const end = match[2] ? Math.min(parseInt(match[2], 10), stat.size - 1) : stat.size - 1;
-        if (start >= stat.size || start > end) {
-          return new Response(null, { status: 416, headers: { 'Content-Range': `bytes */${stat.size}` } });
-        }
-        const chunkSize = end - start + 1;
-        const buf = Buffer.alloc(chunkSize);
-        const fd = fs.openSync(filePath, 'r');
-        fs.readSync(fd, buf, 0, chunkSize, start);
-        fs.closeSync(fd);
-        return new Response(buf, {
-          status: 206,
-          headers: {
-            'Content-Range': `bytes ${start}-${end}/${stat.size}`,
-            'Accept-Ranges': 'bytes',
-            'Content-Length': String(chunkSize),
-            'Content-Type': 'application/pdf',
-          },
-        });
-      }
+// Read-only file response with HTTP Range support (pdf.js fetches just the
+// pages being viewed of a large scan, if ranges are honored).
+function serveFile(filePath, request) {
+  const stat = fs.statSync(filePath);
+  const contentType = CONTENT_TYPES[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
+  const range = request.headers.get('range');
 
-      const data = fs.readFileSync(filePath);
-      return new Response(data, {
-        status: 200,
-        headers: { 'Accept-Ranges': 'bytes', 'Content-Length': String(stat.size), 'Content-Type': 'application/pdf' },
-      });
+  if (range) {
+    const match = /bytes=(\d+)-(\d*)/.exec(range);
+    if (!match) return new Response('bad range', { status: 416 });
+    const start = parseInt(match[1], 10);
+    const end = match[2] ? Math.min(parseInt(match[2], 10), stat.size - 1) : stat.size - 1;
+    if (start >= stat.size || start > end) {
+      return new Response(null, { status: 416, headers: { 'Content-Range': `bytes */${stat.size}` } });
+    }
+    const chunkSize = end - start + 1;
+    const buf = Buffer.alloc(chunkSize);
+    const fd = fs.openSync(filePath, 'r');
+    fs.readSync(fd, buf, 0, chunkSize, start);
+    fs.closeSync(fd);
+    return new Response(buf, {
+      status: 206,
+      headers: {
+        'Content-Range': `bytes ${start}-${end}/${stat.size}`,
+        'Accept-Ranges': 'bytes',
+        'Content-Length': String(chunkSize),
+        'Content-Type': contentType,
+      },
+    });
+  }
+
+  const data = fs.readFileSync(filePath);
+  return new Response(data, {
+    status: 200,
+    headers: { 'Accept-Ranges': 'bytes', 'Content-Length': String(stat.size), 'Content-Type': contentType },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Files in the linked Research library, served in place (never copied) as
+// "research://root/<path relative to the Research folder>" — the page images
+// and original PDFs the Library Browser shows for a linked doc. Read-only
+// (GET/HEAD only) and confined to the Research root, like the other schemes.
+// ---------------------------------------------------------------------------
+function registerResearchProtocol() {
+  protocol.handle('research', async (request) => {
+    try {
+      if (request.method !== 'GET' && request.method !== 'HEAD') return new Response('read-only', { status: 405 });
+      const u = new URL(request.url);
+      const relPath = decodeURIComponent(u.pathname).replace(/^\/+/, '');
+      const filePath = researchSync.resolve(relPath);
+      if (!filePath || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) return new Response('not found', { status: 404 });
+      return serveFile(filePath, request);
     } catch (err) {
       return new Response('error: ' + err.message, { status: 500 });
     }
@@ -614,6 +661,7 @@ app.whenReady().then(async () => {
   initDb(dbPath, libraryDbPath);
   registerLibraryImagesProtocol();
   registerLibraryPdfProtocol();
+  registerResearchProtocol();
 
   ollama = new OllamaManager();
   lmstudio = new LMStudioManager({ getAutoLoad: getLmstudioAutoLoad });
@@ -629,6 +677,8 @@ app.whenReady().then(async () => {
   library = new Library(ollama, libraryStorageDir);
   const migrated = library.backfillChunks();
   if (migrated > 0) console.log(`[library] chunked ${migrated} doc(s) uploaded before chunking existed`);
+  researchSync = new ResearchSync({ library, ollama, getRoot: getResearchRoot });
+  researchSync.on('progress', (p) => win?.webContents.send('research-sync-progress', p));
 
   downloader.on('progress', (data) => win?.webContents.send('pull-progress', data));
   downloader.on('complete', (data) => win?.webContents.send('pull-complete', data));
@@ -860,12 +910,100 @@ ipcMain.handle('library:identify-image', async (e, { model, imageBase64, options
 ipcMain.handle('library:browse', (e, payload) => library.browse(payload));
 ipcMain.handle('library:browse-facets', () => library.browseFacets());
 ipcMain.handle('library:get-doc', (e, id) => library.getDoc(id));
+// Opens a doc's original file in the system viewer: an imported scan
+// (data/library/pdfs), a linked Research doc's original (in place, in the
+// Research folder), or one of the user's own uploads (data/library).
 ipcMain.handle('library:open-pdf', (e, id) => {
   const doc = library.getDoc(id);
-  if (!doc?.pdf_filename) return { ok: false, error: 'No original PDF on file for this doc.' };
-  const filePath = path.join(libraryPdfsDir, doc.pdf_filename);
-  if (!fs.existsSync(filePath)) return { ok: false, error: 'PDF file is missing on disk.' };
+  if (!doc) return { ok: false, error: 'Document not found.' };
+  let filePath = null;
+  if (doc.source === 'research') {
+    if (!doc.ext_original) return { ok: false, error: 'No original file on record for this page.' };
+    filePath = researchSync.resolve(doc.ext_original);
+    if (!filePath) return { ok: false, error: 'Research library not connected — check Tools/Settings → Library.' };
+  } else if (doc.pdf_filename) {
+    filePath = path.join(libraryPdfsDir, doc.pdf_filename);
+  } else if (doc.external_id === null && doc.filename) {
+    filePath = path.join(libraryStorageDir, doc.filename);
+  }
+  if (!filePath) return { ok: false, error: 'No original file on record for this doc.' };
+  if (!fs.existsSync(filePath)) return { ok: false, error: 'The original file is missing on disk.' };
   return shell.openPath(filePath).then((openErr) => (openErr ? { ok: false, error: openErr } : { ok: true }));
+});
+
+// ---------------------------------------------------------------------------
+// IPC — Research library link (see services/researchSync.js)
+// ---------------------------------------------------------------------------
+ipcMain.handle('research:status', () => researchSync.status());
+ipcMain.handle('research:sync', (e, { embedModel, onlyPrefixes } = {}) => {
+  // Fire and forget — progress arrives on 'research-sync-progress'.
+  const started = !researchSync.running && !!getResearchRoot();
+  researchSync.sync({ embedModel, onlyPrefixes });
+  return { started };
+});
+ipcMain.handle('research:pause', () => { researchSync.pause(); return true; });
+ipcMain.handle('research:dismiss-notice', () => { researchSync.dismissNotice(); return true; });
+ipcMain.handle('research:read-doc', (e, id) => {
+  const doc = library.getDoc(id);
+  if (!doc || doc.source !== 'research') return { ok: false, error: 'Not a Research page.' };
+  return researchSync.readDoc(doc);
+});
+// Opens a file a Research page links to (e.g. a PDF report) in the system
+// viewer — confined to the Research folder.
+ipcMain.handle('research:open-file', (e, relPath) => {
+  const filePath = researchSync.resolve(relPath);
+  if (!filePath || !fs.existsSync(filePath)) return { ok: false, error: 'File not found in the Research library.' };
+  return shell.openPath(filePath).then((openErr) => (openErr ? { ok: false, error: openErr } : { ok: true }));
+});
+ipcMain.handle('research:choose-root', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+    title: 'Choose your Research library folder (the one containing CATALOG.json)',
+    properties: ['openDirectory'],
+  });
+  if (canceled || !filePaths[0]) return { ok: false, canceled: true };
+  if (!fs.existsSync(path.join(filePaths[0], 'CATALOG.json'))) {
+    return { ok: false, error: 'That folder has no CATALOG.json — pick the top-level Research folder.' };
+  }
+  hostSettings.researchRoot = filePaths[0];
+  saveHostSettings();
+  return { ok: true, root: getResearchRoot() };
+});
+
+// Reset Library. scope 'research' = drop the Research index only; 'all' =
+// empty every library table and send the app's own copied files
+// (data/library: uploads, imported scans and images) to the Recycle Bin.
+// library.db is backed up first. Chats and the Research folder itself are
+// never touched.
+ipcMain.handle('library:reset', async (e, { scope } = {}) => {
+  if (scope !== 'research' && scope !== 'all') return { ok: false, error: 'Unknown reset scope.' };
+  if (researchSync.running) return { ok: false, error: 'Pause the Research sync first.' };
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+  const backupPath = path.join(dataDir, `library.db.bak-${stamp}`);
+  try {
+    await getDb().backup(backupPath, { attached: 'lib' });
+  } catch (err) {
+    return { ok: false, error: `Backup failed, so nothing was changed: ${err.message}` };
+  }
+
+  let removed;
+  const trashFailed = [];
+  if (scope === 'research') {
+    removed = researchSync.removeAll();
+  } else {
+    removed = getDb().prepare('SELECT COUNT(*) AS n FROM library_docs').get().n;
+    library.clearAll();
+    for (const name of fs.readdirSync(libraryStorageDir)) {
+      try { await shell.trashItem(path.join(libraryStorageDir, name)); } catch { trashFailed.push(name); }
+    }
+    fs.mkdirSync(path.join(libraryStorageDir, 'pdfs'), { recursive: true });
+    fs.mkdirSync(path.join(libraryStorageDir, 'images'), { recursive: true });
+  }
+  try {
+    library.compactSearchIndex();
+    getDb().exec('VACUUM lib');
+    getDb().pragma('lib.wal_checkpoint(TRUNCATE)'); // in WAL mode the shrink only lands on disk at checkpoint
+  } catch { /* space is reclaimed on a later reset */ }
+  return { ok: true, removed, backupPath, trashFailed };
 });
 
 // ---------------------------------------------------------------------------

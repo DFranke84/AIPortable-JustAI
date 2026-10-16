@@ -129,7 +129,23 @@ function initDb(dbPath, libraryDbPath) {
   // those are never flagged as duplicates of each other.
   ensureColumn(db, 'lib.library_docs', 'library_docs', 'content_hash', 'TEXT');
 
+  // Linked docs (source='research'): indexed from a folder outside the app
+  // (the E:\Research library) and read in place — nothing is copied into
+  // data/library/. ext_path is the .md file and ext_original the original
+  // PDF (if any), both relative to the Research root so the link survives a
+  // drive-letter change; ext_mtime is that .md's mtime at last sync, the
+  // cheap first check for "has this file changed?" (see researchSync.js).
+  ensureColumn(db, 'lib.library_docs', 'library_docs', 'ext_path', 'TEXT');
+  ensureColumn(db, 'lib.library_docs', 'library_docs', 'ext_original', 'TEXT');
+  ensureColumn(db, 'lib.library_docs', 'library_docs', 'ext_mtime', 'INTEGER');
+
   db.exec(`CREATE INDEX IF NOT EXISTS lib.idx_library_docs_content_hash ON library_docs(content_hash);`);
+  db.exec(`CREATE INDEX IF NOT EXISTS lib.idx_library_docs_source ON library_docs(source);`);
+
+  // Small key/value store that lives inside library.db (so it travels with
+  // the index if library.db is copied to another app) — e.g. the
+  // CATALOG.json mtime as of the last Research sync.
+  db.exec(`CREATE TABLE IF NOT EXISTS lib.library_meta (key TEXT PRIMARY KEY, value TEXT);`);
 
   db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS lib.idx_library_docs_external_id

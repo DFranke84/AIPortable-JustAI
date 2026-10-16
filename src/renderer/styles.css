@@ -404,3 +404,19 @@ button, input, select, textarea { font-family: inherit; }
 .settings-checkbox-row { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 13px; margin: 8px 0; cursor: pointer; }
 .app-modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .app-modal-actions .hidden { display: none; }
+
+/* ---- Research library link ---------------------------------------------- */
+/* Clickable source chips under a reply: each opens that document in the
+   Reference Library, badged Local (your uploads) or Research (linked). */
+.sources-tag .src-link { font-style: normal; color: var(--text); cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
+.sources-tag .src-link:hover { color: var(--accent); }
+.src-badge { display: inline-block; font-size: 9.5px; font-style: normal; letter-spacing: 0.04em; text-transform: uppercase; padding: 0 5px; margin-right: 4px; border-radius: 4px; border: 1px solid var(--border); color: var(--text-dim); vertical-align: 1px; }
+.src-badge.research { color: var(--good); border-color: var(--good); }
+.src-badge.local { color: var(--accent); border-color: var(--accent-dim); }
+
+.research-notice { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 8px 16px 0; padding: 8px 12px; font-size: 12.5px; color: var(--text); background: var(--panel-raised); border: 1px solid var(--border); border-radius: var(--radius); }
+.research-notice.hidden { display: none; }
+.research-notice span { flex: 1; min-width: 200px; }
+
+.app-modal-input { width: 100%; box-sizing: border-box; margin: -6px 0 18px; padding: 8px 10px; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 6px; font-size: 14px; }
+.app-modal-input.hidden { display: none; }
