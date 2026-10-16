@@ -120,11 +120,12 @@ class Library {
 
     const chunks = chunkText(body);
     const insertChunk = db.prepare('INSERT INTO library_chunks (id, doc_id, chunk_index, text) VALUES (?,?,?,?)');
-    const insertFts = db.prepare('INSERT INTO library_chunks_fts (chunk_id, doc_id, text) VALUES (?,?,?)');
+    // The FTS row shares the chunk's rowid (as researchSync.js relies on).
+    const insertFts = db.prepare('INSERT INTO library_chunks_fts (rowid, chunk_id, doc_id, text) VALUES (?,?,?,?)');
     chunks.forEach((text, i) => {
       const chunkId = `${docId}_c${i}`;
-      insertChunk.run(chunkId, docId, i, text);
-      insertFts.run(chunkId, docId, text);
+      const info = insertChunk.run(chunkId, docId, i, text);
+      insertFts.run(info.lastInsertRowid, chunkId, docId, text);
     });
     return chunks.length;
   }
@@ -238,12 +239,17 @@ class Library {
   // Batched (EMBED_BATCH chunks per Ollama request) — a newly shortlisted
   // long document can bring in dozens of chunks at once, and one round trip
   // per chunk made the first search touching it take many seconds.
-  async ensureChunksEmbedded(embedModel) {
+  // `docIds`, if given, limits the check to those documents — with a fully
+  // prepared Research library there are hundreds of thousands of chunks,
+  // too many to re-check on every chat.
+  async ensureChunksEmbedded(embedModel, docIds = null) {
     const db = getDb();
+    if (docIds && docIds.length === 0) return;
+    const scope = docIds ? `AND c.doc_id IN (${docIds.map(() => '?').join(',')})` : '';
     const missing = db.prepare(`
       SELECT c.id, c.text FROM library_chunks c
-      WHERE NOT EXISTS (SELECT 1 FROM library_chunk_embeddings e WHERE e.chunk_id = c.id)
-    `).all();
+      WHERE NOT EXISTS (SELECT 1 FROM library_chunk_embeddings e WHERE e.chunk_id = c.id) ${scope}
+    `).all(...(docIds || []));
     const insert = db.prepare('INSERT OR REPLACE INTO library_chunk_embeddings (chunk_id, vector, dims) VALUES (?,?,?)');
     for (let i = 0; i < missing.length; i += EMBED_BATCH) {
       const batch = missing.slice(i, i + EMBED_BATCH);
@@ -262,7 +268,7 @@ class Library {
     const db = getDb();
     const queryVec = await this.ollama.embed(embedModel, query);
     if (!queryVec) return [];
-    await this.ensureChunksEmbedded(embedModel);
+    await this.ensureChunksEmbedded(embedModel, docIds);
 
     const scope = docIds ? `WHERE c.doc_id IN (${docIds.map(() => '?').join(',')})` : '';
     const rows = db
@@ -421,7 +427,7 @@ class Library {
       if (ftsRow?.body) this.insertChunks(id, ftsRow.body);
     }
     if (unchunked.length) {
-      try { await this.ensureChunksEmbedded(embedModel); } catch { /* embed model may be missing */ }
+      try { await this.ensureChunksEmbedded(embedModel, unchunked.map((r) => r.id)); } catch { /* embed model may be missing */ }
     }
 
     return this.chunkSearch(query, embedModel, limit, docIds);
