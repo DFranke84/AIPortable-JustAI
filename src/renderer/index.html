@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'self' blob:; img-src 'self' data: blob: libimg:; connect-src 'self' libimg: libpdf:;" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'self' blob:; img-src 'self' data: blob: libimg: research:; connect-src 'self' libimg: libpdf: research:;" />
   <title>Local AI</title>
   <script src="theme-init.js"></script>
   <link rel="stylesheet" href="styles.css" />
@@ -45,6 +45,12 @@
           </div>
         </header>
 
+        <div id="research-notice" class="research-notice hidden">
+          <span id="research-notice-text"></span>
+          <button id="research-notice-sync" class="pull-btn">Sync now</button>
+          <button id="research-notice-dismiss" class="pull-btn">Not now</button>
+        </div>
+
         <div class="messages-wrap">
           <div id="messages" class="messages">
             <div class="empty-state">
@@ -79,7 +85,7 @@
             <div class="search-row">
               <input id="browser-query" type="text" placeholder="Filter by title…" />
               <select id="browser-category"><option value="">All categories</option></select>
-              <select id="browser-source"><option value="">All sources</option></select>
+              <select id="browser-source"><option value="">All sources</option><option value="__local__">Local uploads</option></select>
               <button id="browser-search-btn" class="btn-icon">→</button>
             </div>
             <div id="browser-results" class="library-list library-grid"></div>
@@ -325,6 +331,22 @@
           <div id="library-results" class="library-list"></div>
           <h4 class="panel-subhead">Uploaded</h4>
           <div id="library-uploads" class="library-list"></div>
+
+          <h4 class="panel-subhead">Research Library (linked, not copied)</h4>
+          <p class="panel-hint">Indexes your Research library where it sits — recipes, the Cooking School and the offline archives are left out. Pages, photos and PDFs are opened from the Research folder; nothing is copied or changed there.</p>
+          <div id="research-status" class="meta"></div>
+          <div id="research-progress" class="meta"></div>
+          <div class="search-row">
+            <button id="research-sync-btn" class="pull-btn">Sync Research Library</button>
+            <button id="research-pause-btn" class="pull-btn" hidden>Pause</button>
+            <button id="research-choose-btn" class="pull-btn">Change folder…</button>
+          </div>
+
+          <h4 class="panel-subhead">Reset</h4>
+          <div class="search-row">
+            <button id="research-remove-btn" class="pull-btn">Remove Research index…</button>
+            <button id="library-reset-btn" class="pull-btn">Reset entire library…</button>
+          </div>
         </section>
 
         <section id="tab-mobile" class="tab-panel">
@@ -363,6 +385,7 @@
     <div id="app-modal-overlay" class="app-modal-overlay hidden">
       <div class="app-modal">
         <div id="app-modal-message" class="app-modal-message"></div>
+        <input id="app-modal-input" class="app-modal-input hidden" type="text" autocomplete="off" spellcheck="false" />
         <label id="app-modal-checkbox-row" class="app-modal-checkbox-row hidden">
           <input type="checkbox" id="app-modal-checkbox" />
           <span id="app-modal-checkbox-label"></span>
