@@ -206,6 +206,11 @@ function backendFor(purpose) {
 function getLmstudioAutoLoad() {
   return hostSettings.lmstudioAutoLoad !== false; // default on
 }
+// Whether LM Studio models may "think" before answering (default on = each
+// model's own default). Off = faster replies; see lmstudio.js reasoningEffort.
+function getLmstudioThinking() {
+  return hostSettings.lmstudioThinking !== false;
+}
 
 // Whether the *chat* runtime is reachable — what the status dot shows.
 async function runtimeReady() {
@@ -664,7 +669,7 @@ app.whenReady().then(async () => {
   registerResearchProtocol();
 
   ollama = new OllamaManager();
-  lmstudio = new LMStudioManager({ getAutoLoad: getLmstudioAutoLoad });
+  lmstudio = new LMStudioManager({ getAutoLoad: getLmstudioAutoLoad, getThinking: getLmstudioThinking });
   downloader = new ModelDownloader(ollama, dataDir);
   // The phone server only needs the current model + chatStream, routed to
   // whichever runtime is active at the time of each request.
@@ -826,6 +831,7 @@ async function getBackendSettings() {
     backend: getLlmBackend(),
     visionUseOllama: !!hostSettings.visionUseOllama,
     lmstudioAutoLoad: getLmstudioAutoLoad(),
+    lmstudioThinking: getLmstudioThinking(),
     lmstudio: {
       reachable: lm.connected,
       port: lmstudio.getPort(),
@@ -840,6 +846,7 @@ ipcMain.handle('backend:set', async (e, patch = {}) => {
   if (patch.backend === 'ollama' || patch.backend === 'lmstudio') hostSettings.llmBackend = patch.backend;
   if (typeof patch.visionUseOllama === 'boolean') hostSettings.visionUseOllama = patch.visionUseOllama;
   if (typeof patch.lmstudioAutoLoad === 'boolean') hostSettings.lmstudioAutoLoad = patch.lmstudioAutoLoad;
+  if (typeof patch.lmstudioThinking === 'boolean') hostSettings.lmstudioThinking = patch.lmstudioThinking;
   saveHostSettings();
   // Same event as startup, so the renderer refreshes its model lists and
   // status dot for the newly selected runtime.

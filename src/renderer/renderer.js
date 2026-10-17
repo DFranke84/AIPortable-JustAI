@@ -97,6 +97,7 @@ const els = {
   backendLmstudioOptions: document.getElementById('backend-lmstudio-options'),
   backendLmstudioStatus: document.getElementById('backend-lmstudio-status'),
   backendLmstudioAutoload: document.getElementById('backend-lmstudio-autoload'),
+  backendLmstudioThinking: document.getElementById('backend-lmstudio-thinking'),
   backendVisionOllama: document.getElementById('backend-vision-ollama'),
   catalogFileInfoList: document.getElementById('catalog-file-info-list'),
   modelsLocationInfo: document.getElementById('models-location-info'),
@@ -1003,6 +1004,7 @@ async function refreshBackendControl() {
   const lm = settings.lmstudio;
   els.backendLmstudioOptions.hidden = settings.backend !== 'lmstudio';
   els.backendLmstudioAutoload.checked = settings.lmstudioAutoLoad;
+  els.backendLmstudioThinking.checked = settings.lmstudioThinking;
   els.backendVisionOllama.checked = settings.visionUseOllama;
   const jitText = lm.jitEnabled === true ? 'On — LM Studio swaps models itself'
     : lm.jitEnabled === false ? 'Off — the app loads models through LM Studio\'s API'
@@ -1029,6 +1031,9 @@ async function refreshBackendControl() {
 els.backendLmstudioAutoload.addEventListener('change', async () => {
   const s = await window.localAI.setBackendSettings({ lmstudioAutoLoad: els.backendLmstudioAutoload.checked });
   state.lmstudioAutoLoad = s.lmstudioAutoLoad;
+});
+els.backendLmstudioThinking.addEventListener('change', () => {
+  window.localAI.setBackendSettings({ lmstudioThinking: els.backendLmstudioThinking.checked });
 });
 els.backendVisionOllama.addEventListener('change', () => {
   window.localAI.setBackendSettings({ visionUseOllama: els.backendVisionOllama.checked });
