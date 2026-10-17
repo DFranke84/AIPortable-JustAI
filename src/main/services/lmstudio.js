@@ -95,13 +95,29 @@ function toOpenAIMessages(messages) {
   });
 }
 
+// The reasoning_effort to send for `entry` (an /api/v1/models record), or
+// null to leave the model on its own default. LM Studio reports per model
+// which reasoning settings it accepts (e.g. ['off', 'on'] for Qwen 3.x,
+// ['low', 'medium', 'high'] for gpt-oss). On the OpenAI-compatible endpoint
+// it honors reasoning_effort "none" as "off" — its own `reasoning` field and
+// chat_template_kwargs.enable_thinking are ignored there (tested 2026-10 on
+// qwen3.5-9b: 0 reasoning tokens with "none", ~1.5k with the others). A
+// model that can't switch thinking off gets its lowest level instead.
+function reasoningEffort(entry, thinking) {
+  const options = entry?.capabilities?.reasoning?.allowed_options;
+  if (thinking || !Array.isArray(options)) return null;
+  if (options.includes('off')) return 'none';
+  return options.includes('low') ? 'low' : null;
+}
+
 class LMStudioManager {
-  constructor({ getAutoLoad } = {}) {
+  constructor({ getAutoLoad, getThinking } = {}) {
     this.currentModel = null;
     this.currentRequest = null;
     // Read live (not captured once) so toggling the setting applies to the
     // very next request.
     this.getAutoLoad = getAutoLoad || (() => true);
+    this.getThinking = getThinking || (() => true);
   }
 
   getPort() {
@@ -203,15 +219,16 @@ class LMStudioManager {
     const all = await this.listAll();
     const entry = all.find((m) => m.key === model);
     if (!entry) throw new Error(`"${model}" wasn't found in LM Studio — it may have been renamed or deleted. Pick another model.`);
-    if ((entry.loaded_instances || []).length > 0) return;
+    if ((entry.loaded_instances || []).length > 0) return entry;
     if (!this.getAutoLoad()) {
       throw new Error(`"${model}" isn't loaded in LM Studio. Load it there first, or turn on "Auto-load" in Tools → Models.`);
     }
-    if (this.getJitEnabled() === true) return;
+    if (this.getJitEnabled() === true) return entry;
     await request('/api/v1/models/load', {
       method: 'POST',
       body: { model, ...(numCtx ? { context_length: numCtx } : {}) },
     });
+    return entry;
   }
 
   // Streams OpenAI SSE chunks, forwarding each content delta to `onToken` in
@@ -220,10 +237,12 @@ class LMStudioManager {
   // length at load time and has no per-request equivalent. Reasoning tokens
   // (delta.reasoning_content) are dropped, matching how the renderer already
   // ignores Ollama's separate `thinking` field.
+  // Thinking follows the user's Tools → Models setting (getThinking).
   async chatStream({ model, messages, options }, onToken) {
-    await this.ensureLoaded(model, options?.num_ctx);
+    const entry = await this.ensureLoaded(model, options?.num_ctx);
+    const effort = reasoningEffort(entry, this.getThinking());
     return new Promise((resolve, reject) => {
-      const body = JSON.stringify({ model, messages: toOpenAIMessages(messages), stream: true });
+      const body = JSON.stringify({ model, messages: toOpenAIMessages(messages), stream: true, ...(effort ? { reasoning_effort: effort } : {}) });
       const req = http.request(
         { hostname: HOST, port: getPort(), path: '/v1/chat/completions', method: 'POST', headers: { 'Content-Type': 'application/json' } },
         (res) => {
@@ -292,11 +311,14 @@ class LMStudioManager {
     return false;
   }
 
+  // Short behind-the-scenes requests (chat titles, image identification)
+  // never think — it only adds delay to a one-line answer.
   async complete(model, messages, options) {
-    await this.ensureLoaded(model, options?.num_ctx);
+    const entry = await this.ensureLoaded(model, options?.num_ctx);
+    const effort = reasoningEffort(entry, false);
     const res = await request('/v1/chat/completions', {
       method: 'POST',
-      body: { model, messages: toOpenAIMessages(messages), stream: false },
+      body: { model, messages: toOpenAIMessages(messages), stream: false, ...(effort ? { reasoning_effort: effort } : {}) },
     });
     return res?.choices?.[0]?.message?.content?.trim() || null;
   }
