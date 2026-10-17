@@ -74,34 +74,39 @@ Or, from a PowerShell window opened in the folder:
 powershell -ExecutionPolicy Bypass -File scripts\setup-windows.ps1
 ```
 
-The script prints a numbered `==>` line for each step and a green `OK:` for
-each success:
+First it asks **which chat model to download**: it detects your graphics
+card's memory and lists the matching model catalog (4K/8K/12K/24K/32K). Type a
+number — the first *General* model is a good choice — or press Enter to skip.
+After that it runs on its own, printing a `==>` line for each step and a
+green `OK:` for each success:
 
 | # | Step | What happens |
 |---|---|---|
 | 1 | Node.js | Uses your Node.js 22.12+ if you have one. Otherwise it downloads a **portable** Node.js LTS into `runtime\node\`, with no admin rights and no changes to PATH or the registry. |
 | 2 | App dependencies | `npm ci` installs from the lockfile, then downloads the **Electron** runtime, and copies the renderer libraries (marked, pdf.js). The **better-sqlite3** database library ships ready-made binaries, so nothing is compiled. |
 | 3 | Ollama | Downloads the official portable `ollama-windows-amd64.zip` (or arm64) from GitHub into `resources\ollama\win\`. Nothing is installed system-wide. |
-| 4 | Data folders | Creates empty `data\models` and `data\library`. |
-| 5 | Models | Starts a temporary Ollama and pulls **`nomic-embed-text`** (~274 MB), which powers Library semantic search. If you passed `-Model`, it pulls that model too. |
-| 6 | Voice (optional) | Only with `-WithVoice`. |
-| 7 | Verify | Checks that Electron, the vendor assets, and Ollama are in place, and that the database library actually loads inside Electron. |
+| 4 | Kiwix | Downloads `kiwix-serve` (~15 MB) from download.kiwix.org into `resources\kiwix\win\`. It powers the 🗃️ ZIM archive search in chat. |
+| 5 | Voice input | Downloads the whisper.cpp server and the `ggml-base.en` model (~150 MB) into `resources\whisper\win\` for the 🎤 button. Skip with `-NoVoice`. |
+| 6 | Data folders | Creates empty `data\models` and `data\library`. |
+| 7 | Models | Starts a temporary Ollama and pulls **`nomic-embed-text`** (~274 MB), which powers Library semantic search, plus the chat model you picked. |
+| 8 | Verify | Checks that every component is in place and that the database library loads inside Electron, then offers to start the app. |
 
-Expect about 2 GB of downloads (Ollama is most of it). The script is safe to
-re-run: it skips any step that's already done.
+Expect about 2 GB of downloads (Ollama is most of it) plus your chat model.
+The script is safe to re-run: it skips any step that's already done.
 
 **Flags.** Add them after the `.bat` or `.ps1`, for example
 `Setup-Windows.bat -Model qwen2.5:3b`.
 
 | Flag | Effect |
 |---|---|
-| `-Model <name>` | Also pull a chat model, e.g. `-Model qwen2.5:3b` |
+| `-Model <name>` | Pull this chat model instead of asking, e.g. `-Model qwen2.5:3b` |
 | `-SkipModels` | Don't pull any models now |
 | `-Rocm` | Also install Ollama's AMD ROCm GPU package |
 | `-OllamaVersion v0.x.y` | Pin a specific Ollama release (default: latest) |
 | `-SkipOllama` | Don't download Ollama; use one installed from ollama.com instead |
 | `-UseWinget` | Install Node.js system-wide with winget instead of the portable copy |
-| `-WithVoice` | Install the optional whisper.cpp voice-input server |
+| `-NoVoice` | Leave out voice input (installed by default) |
+| `-NoLaunch` | Don't offer to start the app at the end |
 
 ### Step 2.3 — Launch
 
@@ -141,6 +146,7 @@ It asks for your sudo password once, to install distro packages.
 | 3 | App dependencies | `npm ci`, then the Electron runtime and the renderer libraries. Nothing is compiled. |
 | 4 | Electron sandbox | `sudo chown root:root` + `chmod 4755` on `node_modules/electron/dist/chrome-sandbox`. Needed on distros that restrict user namespaces, such as Ubuntu 24.04+. |
 | 5 | Ollama | Downloads the official `ollama-linux-amd64.tar.zst` (or arm64) from GitHub into `resources/ollama/linux/`. There is no system service and no systemd unit. |
+| 5b | Kiwix | Downloads `kiwix-serve` from download.kiwix.org into `resources/kiwix/linux/` (🗃️ ZIM search). |
 | 6 | Data folders | Creates empty `data/models` and `data/library`. |
 | 7 | Models | Pulls **`nomic-embed-text`**, plus the `--model` model if you gave one. |
 | 8 | Voice (optional) | Only with `--with-voice`. whisper.cpp is compiled from source because it publishes no Linux binaries. |
@@ -193,8 +199,9 @@ On first launch the app opens to an empty chat. The status dot turns green
 2. Under **GPU size**, pick your card's VRAM tier (4K = 4 GB, 8K, 12K, 24K,
    32K). You can select several. This only filters the catalog list; it
    doesn't limit what you can run.
-3. In **Catalog**, click **Pull** on a model. For a fast first model, pick a
-   small one of 1–3 GB, such as `qwen2.5:3b` or `llama3.2:1b`.
+3. In **Catalog**, click **Pull** on a model (skip this if you picked one
+   during setup). For a fast first model, pick a small one of 1–3 GB, such
+   as `qwen2.5:3b` or `llama3.2:1b`.
 4. Pick the model from the dropdown at the top of the chat and start typing.
 
 Other things to know:
@@ -233,9 +240,10 @@ On Windows, use `resources\ollama\win\ollama.exe pull qwen2.5:3b`.
 
 ### Voice input (🎤 button)
 
-Re-run setup with `-WithVoice` (Windows) or `--with-voice` (Linux). This
-installs `whisper-server` plus the `ggml-base.en` model (~148 MB) under
-`resources/whisper/<os>/`.
+On Windows, setup installs it by default (leave it out with `-NoVoice`). On
+Linux, re-run setup with `--with-voice`: whisper.cpp is compiled there, so
+it stays optional. Either way it puts `whisper-server` plus the
+`ggml-base.en` model (~148 MB) under `resources/whisper/<os>/`.
 
 Click 🎤 and speak, then click it again to stop. The button pulses while the
 recording is transcribed, and the text is added to the message box. The app

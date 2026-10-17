@@ -1,8 +1,12 @@
 <#
   setup-windows.ps1 - one-time environment setup for AIPortable-JustAI on Windows.
 
-  Takes a brand-new machine from "just this folder" to "ready to launch":
+  Takes a brand-new machine from "just this folder" to "ready to launch".
+  Double-click Setup-Windows.bat in the project root; it runs this script.
 
+    0. Questions    - asked first, so you can walk away during the downloads:
+                      which chat model(s) to download (from the model catalog
+                      that matches this PC's graphics card).
     1. Node.js      - uses an existing Node.js 22.12+ if one is on PATH; otherwise
                       downloads a PORTABLE copy of the current Node.js LTS into
                       runtime\node\ (no admin rights, nothing added to PATH or
@@ -13,33 +17,29 @@
                       (marked, pdf.js) into src\renderer\vendor\, and makes
                       sure better-sqlite3 loads inside Electron.
     3. Ollama       - downloads the official portable Windows build from
-                      github.com/ollama/ollama and unpacks it into
-                      resources\ollama\win\ (no system-wide install).
-    4. Data folders - creates the empty data\models and data\library folders.
-    5. Models       - pulls 'nomic-embed-text' (needed for Library semantic
-                      search) and, if you pass -Model, one chat model too.
-    6. Voice input  - OPTIONAL (-WithVoice): whisper.cpp server + base.en model.
-    7. Verify       - checks that everything the launcher needs is in place.
+                      github.com/ollama/ollama into resources\ollama\win\.
+    4. Kiwix        - downloads kiwix-serve (download.kiwix.org) into
+                      resources\kiwix\win\ - powers the chat's ZIM archive search.
+    5. Voice input  - whisper.cpp server + base.en model into resources\whisper\win\
+                      (skip with -NoVoice).
+    6. Data folders - creates the empty data\models and data\library folders.
+    7. Models       - pulls 'nomic-embed-text' (Library semantic search) and the
+                      chat model(s) picked in step 0.
+    8. Verify       - checks that everything the app needs is in place, then
+                      offers to start the app.
 
   Safe to re-run: every step skips work that is already done.
 
-  Usage (from the project root, in a normal - not admin - PowerShell window):
-    powershell -ExecutionPolicy Bypass -File scripts\setup-windows.ps1
-  or just double-click Setup-Windows.bat in the project root.
-
-  Flags:
+  Flags (optional - Setup-Windows.bat passes them through):
     -UseWinget        Install Node.js LTS system-wide via winget instead of the
-                      portable copy (you must re-run this script in a new
-                      window afterwards so PATH picks it up).
-    -SkipOllama       Don't download Ollama (use a system-wide install from
-                      https://ollama.com/download instead - the app falls back
-                      to 'ollama' on PATH automatically).
-    -OllamaVersion v  Pin a specific Ollama release tag, e.g. v0.12.3
-                      (default: latest).
+                      portable copy (re-run this script in a new window after).
+    -SkipOllama       Don't download Ollama (use a system-wide install instead).
+    -OllamaVersion v  Pin a specific Ollama release tag, e.g. v0.12.3 (default: latest).
     -Rocm             Also download Ollama's AMD ROCm GPU add-on package.
-    -SkipModels       Don't pull any models during setup.
-    -Model name       Also pull this chat model, e.g. -Model qwen2.5:3b
-    -WithVoice        Also install the optional whisper.cpp voice-input server.
+    -NoVoice          Don't install the voice-input (microphone) feature.
+    -SkipModels       Don't download any models.
+    -Model name       Download this chat model instead of asking, e.g. -Model qwen2.5:3b
+    -NoLaunch         Don't offer to start the app at the end.
 #>
 
 param(
@@ -47,15 +47,18 @@ param(
   [switch]$SkipOllama,
   [string]$OllamaVersion = 'latest',
   [switch]$Rocm,
+  [switch]$NoVoice,
+  [switch]$WithVoice,   # accepted for older instructions; voice is now installed by default
   [switch]$SkipModels,
   [string]$Model = '',
-  [switch]$WithVoice
+  [switch]$NoLaunch
 )
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'   # Invoke-WebRequest is ~10x slower with the progress bar on
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
+$AppName = 'AIPortable-JustAI'
 function Write-Step($msg) { Write-Host ""; Write-Host "==> $msg" -ForegroundColor Cyan }
 function Write-Ok($msg)   { Write-Host "    OK: $msg" -ForegroundColor Green }
 function Write-Note($msg) { Write-Host "    NOTE: $msg" -ForegroundColor Yellow }
@@ -68,7 +71,7 @@ function Fail($msg) {
 function Download($url, $dest) {
   Write-Host "    Downloading $url"
   try {
-    Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing -Headers @{ 'User-Agent' = 'AIPortable-JustAI-setup' }
+    Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing -Headers @{ 'User-Agent' = "$AppName-setup" }
   } catch {
     Fail "Could not download $url`n       $($_.Exception.Message)`n       Check your internet connection (and any proxy/firewall) and re-run."
   }
@@ -78,10 +81,104 @@ function Download($url, $dest) {
 # this works no matter which directory PowerShell was started in.
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
-Write-Host "AIPortable-JustAI setup running in: $root"
+Write-Host "$AppName setup running in: $root"
 
 $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' }
 if (-not [Environment]::Is64BitOperatingSystem) { Fail "A 64-bit version of Windows is required." }
+
+$ollamaDir = Join-Path $root 'resources\ollama\win'
+$ollamaExe = Join-Path $ollamaDir 'ollama.exe'
+$modelsDir = Join-Path $root 'data\models'
+
+# ---------------------------------------------------------------------------
+# Model picker helpers
+# ---------------------------------------------------------------------------
+# Graphics-card memory in GB (0 = unknown). nvidia-smi is exact for NVIDIA;
+# for others the driver's own 64-bit figure in the registry is used
+# (Win32_VideoController.AdapterRAM tops out at 4 GB, so it can't be trusted).
+function Get-GpuMemoryGB {
+  if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {
+    try {
+      $mb = & nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | Select-Object -First 1
+      if ($mb) { return [int][math]::Round([double]$mb / 1024) }
+    } catch { }
+  }
+  $best = 0
+  Get-ItemProperty -Path 'HKLM:\SYSTEM\ControlSet001\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}\0*' -Name 'HardwareInformation.qwMemorySize' -ErrorAction SilentlyContinue |
+    ForEach-Object { $b = [double]$_.'HardwareInformation.qwMemorySize'; if ($b -gt $best) { $best = $b } }
+  if ($best -gt 0) { return [int][math]::Round($best / 1GB) }
+  return 0
+}
+
+# Whether a model is already in data\models (Ollama's manifest layout).
+function Test-ModelInstalled($id) {
+  $name, $tag = $id.Split(':', 2)
+  if (-not $tag) { $tag = 'latest' }
+  $parts = $name.Split('/')
+  # hf.co/owner/repo - a dot in a plain name (qwen3.5) doesn't make it a host
+  $rel = if ($parts.Count -ge 2 -and $parts[0] -match '\.') { $parts -join '\' }
+         elseif ($parts.Count -eq 1) { "registry.ollama.ai\library\$name" }
+         else { "registry.ollama.ai\$($parts -join '\')" }
+  return Test-Path (Join-Path $modelsDir "manifests\$rel\$tag")
+}
+
+# Shows a numbered list and returns the items picked ("1" or "1,3"; Enter = none).
+function Read-Choices($items, $prompt) {
+  $answer = Read-Host $prompt
+  $picked = @()
+  foreach ($tok in ($answer -split '[,\s]+' | Where-Object { $_ })) {
+    $n = 0
+    if ([int]::TryParse($tok, [ref]$n) -and $n -ge 1 -and $n -le $items.Count) { $picked += $items[$n - 1] }
+    else { Write-Note "Ignored '$tok' - not a number from the list." }
+  }
+  return $picked
+}
+
+function Select-ChatModels {
+  $gb = Get-GpuMemoryGB
+  $tier = 4
+  foreach ($t in 4, 8, 12, 24, 32) { if ($gb -ge $t) { $tier = $t } }
+  $file = Join-Path $root "data\${tier}K-models-catalog.json"
+  if (-not (Test-Path $file)) { Write-Note "No model catalog found ($file) - pick a chat model later in Tools -> Models."; return @() }
+  $cat = Get-Content $file -Raw | ConvertFrom-Json
+  $weights = @{}
+  $cat.categories.PSObject.Properties | ForEach-Object { $weights[$_.Name] = [int]$_.Value }
+  $i = 0
+  $list = @($cat.models.PSObject.Properties | Where-Object { $_.Value.category -ne 'Embedding' } | ForEach-Object {
+    $w = if ($weights.ContainsKey($_.Value.category)) { $weights[$_.Value.category] } else { 99 }
+    [pscustomobject]@{ Id = $_.Name; Name = $_.Value.name; Size = $_.Value.size; Category = $_.Value.category; W = $w; Order = $i++ }
+  } | Sort-Object W, Order)
+  if (-not $list.Count) { return @() }
+
+  Write-Host ""
+  if ($gb -gt 0) { Write-Host "    This PC's graphics card has about $gb GB of memory - showing the ${tier}K model catalog." }
+  else { Write-Host "    Couldn't detect the graphics card's memory - showing the smallest (4K) model catalog." }
+  Write-Host "    A chat model is what answers your questions. One is enough to start (the first General one is a good choice)."
+  Write-Host ""
+  $idWidth = ($list | ForEach-Object { $_.Id.Length } | Measure-Object -Maximum).Maximum
+  for ($n = 0; $n -lt $list.Count; $n++) {
+    $m = $list[$n]
+    $have = if (Test-ModelInstalled $m.Id) { '  (already downloaded)' } else { '' }
+    Write-Host (("    {0,2}) {1,-12} {2,-" + $idWidth + "} {3,8}  {4}{5}") -f ($n + 1), $m.Category, $m.Id, $m.Size, $m.Name, $have)
+  }
+  Write-Host ""
+  return @(Read-Choices $list "    Type the number(s) of the chat model(s) to download (e.g. 1 or 1,3), or press Enter to skip" | ForEach-Object { $_.Id })
+}
+
+# ---------------------------------------------------------------------------
+# 0. Questions first, so the rest can run unattended
+# ---------------------------------------------------------------------------
+$chatModels = @()
+if (-not $SkipModels) {
+  if ($Model) { $chatModels = @($Model) }
+  else {
+    Write-Step "Choose a chat model to download"
+    $chatModels = @(Select-ChatModels)
+    if (-not $chatModels.Count) { Write-Note "No chat model picked - you can download one later in Tools -> Models." }
+  }
+}
+Write-Host ""
+Write-Host "Thanks - the rest runs on its own. It needs an internet connection and can take a while." -ForegroundColor Cyan
 
 # ---------------------------------------------------------------------------
 # 1. Node.js
@@ -128,7 +225,7 @@ if (-not $haveNode) {
   try {
     $index = Invoke-RestMethod -Uri 'https://nodejs.org/dist/index.json' -UseBasicParsing
   } catch {
-    Fail "Could not reach nodejs.org. Install Node.js 18+ manually from https://nodejs.org/ and re-run."
+    Fail "Could not reach nodejs.org. Install Node.js 22.12+ manually from https://nodejs.org/ and re-run."
   }
   $lts = $index | Where-Object { $_.lts -and ($_.files -contains "win-$arch-zip") } | Select-Object -First 1
   if (-not $lts) { Fail "Could not find a Node.js LTS build for win-$arch." }
@@ -151,9 +248,9 @@ if (-not $haveNode) {
 Write-Host "    node $(& node -v), npm $(& npm -v)"
 
 # ---------------------------------------------------------------------------
-# 2. npm dependencies (Electron, better-sqlite3 rebuild, vendor assets)
+# 2. npm dependencies (Electron, better-sqlite3, vendor assets)
 # ---------------------------------------------------------------------------
-Write-Step "Installing app dependencies (Electron etc.) - needs internet, can take a few minutes"
+Write-Step "Installing app dependencies (Electron etc.) - can take a few minutes"
 
 $electronExe = Join-Path $root 'node_modules\electron\dist\electron.exe'
 
@@ -214,8 +311,6 @@ if ((Test-Path $electronExe) -and (Test-Path (Join-Path $root 'src\renderer\vend
 # ---------------------------------------------------------------------------
 # 3. Portable Ollama
 # ---------------------------------------------------------------------------
-$ollamaDir = Join-Path $root 'resources\ollama\win'
-$ollamaExe = Join-Path $ollamaDir 'ollama.exe'
 $ollamaArch = if ($arch -eq 'arm64') { 'arm64' } else { 'amd64' }
 $ollamaBase = if ($OllamaVersion -eq 'latest') { 'https://github.com/ollama/ollama/releases/latest/download' } else { "https://github.com/ollama/ollama/releases/download/$OllamaVersion" }
 
@@ -223,7 +318,7 @@ if ($SkipOllama) {
   Write-Step "Skipping Ollama download (-SkipOllama)"
   Write-Note "Install Ollama from https://ollama.com/download - the app uses 'ollama' on PATH when no portable copy is present."
 } else {
-  Write-Step "Setting up portable Ollama ($OllamaVersion, windows-$ollamaArch)"
+  Write-Step "Setting up portable Ollama ($OllamaVersion, windows-$ollamaArch) - about 1.5 GB"
   if (Test-Path $ollamaExe) {
     Write-Ok "Portable Ollama already present - skipping (delete resources\ollama\win\ollama.exe to force a re-download)"
   } else {
@@ -249,75 +344,48 @@ if ($SkipOllama) {
 }
 
 # ---------------------------------------------------------------------------
-# 4. Runtime data folders
+# 4. Kiwix (kiwix-serve, for ZIM archive search in chat)
 # ---------------------------------------------------------------------------
-Write-Step "Creating empty runtime data folders"
-foreach ($folder in @('data\models', 'data\library')) {
-  New-Item -ItemType Directory -Force -Path (Join-Path $root $folder) | Out-Null
-}
-Write-Ok "data\models and data\library ready (chats.db / library.db are created on first launch)"
-
-# ---------------------------------------------------------------------------
-# 5. Models
-# ---------------------------------------------------------------------------
-if ($SkipModels) {
-  Write-Step "Skipping model downloads (-SkipModels)"
+Write-Step "Setting up Kiwix (searches .zim archives from chat) - about 15 MB"
+$kiwixDir = Join-Path $root 'resources\kiwix\win'
+$kiwixExe = Join-Path $kiwixDir 'kiwix-serve.exe'
+if (Test-Path $kiwixExe) {
+  Write-Ok "kiwix-serve.exe already present - skipping"
 } else {
-  Write-Step "Pulling models into data\models"
-  $ollamaCmd = $null
-  if (Test-Path $ollamaExe) { $ollamaCmd = $ollamaExe }
-  elseif (Get-Command ollama -ErrorAction SilentlyContinue) { $ollamaCmd = (Get-Command ollama).Source }
-
-  if (-not $ollamaCmd) {
-    Write-Note "No Ollama binary available - pull models later from Tools -> Models inside the app."
-  } else {
-    $alreadyRunning = $false
-    try { Invoke-WebRequest -Uri 'http://127.0.0.1:11434/api/tags' -UseBasicParsing -TimeoutSec 2 | Out-Null; $alreadyRunning = $true } catch { }
-
-    $serverProc = $null
-    if ($alreadyRunning) {
-      Write-Note "Another Ollama is already running on port 11434, so models will go wherever THAT instance stores them, not data\models. Quit it (tray icon -> Quit) and re-run if you want them in the portable folder."
-    } else {
-      # Same OLLAMA_MODELS the app sets in main.js, so the models land in the
-      # portable data\models folder and travel with the app.
-      $env:OLLAMA_MODELS = Join-Path $root 'data\models'
-      Write-Host "    Starting a temporary Ollama server..."
-      $serverProc = Start-Process -FilePath $ollamaCmd -ArgumentList 'serve' -WindowStyle Hidden -PassThru
+  New-Item -ItemType Directory -Force -Path $kiwixDir | Out-Null
+  # Kiwix has no "latest" link for Windows - read the release folder and take
+  # the newest x86_64 build, falling back to the version this app was tested with.
+  $kiwixBase = 'https://download.kiwix.org/release/kiwix-tools/'
+  $kiwixZipName = 'kiwix-tools_win-x86_64-3.8.1.zip'
+  try {
+    $listing = (Invoke-WebRequest -Uri $kiwixBase -UseBasicParsing).Content
+    $names = [regex]::Matches($listing, 'kiwix-tools_win-x86_64-([\d.]+(?:-\d+)?)\.zip') | ForEach-Object { $_.Value } | Sort-Object -Unique
+    if ($names) {
+      $kiwixZipName = $names | Sort-Object { [version](($_ -replace '^kiwix-tools_win-x86_64-', '' -replace '\.zip$', '' -replace '-', '.')) } | Select-Object -Last 1
     }
-    try {
-      $ready = $false
-      for ($i = 0; $i -lt 30; $i++) {
-        try { Invoke-WebRequest -Uri 'http://127.0.0.1:11434/api/tags' -UseBasicParsing -TimeoutSec 2 | Out-Null; $ready = $true; break } catch { Start-Sleep -Seconds 1 }
-      }
-      if (-not $ready) {
-        Write-Note "Ollama didn't start in time - pull models later from Tools -> Models inside the app."
-      } else {
-        $toPull = @('nomic-embed-text:latest')
-        if ($Model) { $toPull += $Model }
-        foreach ($m in $toPull) {
-          Write-Host "    ollama pull $m"
-          & $ollamaCmd pull $m
-          if ($LASTEXITCODE -eq 0) { Write-Ok "$m pulled" } else { Write-Note "Pulling $m failed - you can pull it later from Tools -> Models." }
-        }
-      }
-    } finally {
-      if ($serverProc -and -not $serverProc.HasExited) {
-        Stop-Process -Id $serverProc.Id -Force -ErrorAction SilentlyContinue
-        # ollama.exe spawns separate runner processes; don't leave them behind.
-        Get-Process -Name 'llama-server', 'ollama' -ErrorAction SilentlyContinue |
-          Where-Object { $_.Path -and $_.Path.StartsWith($ollamaDir, [StringComparison]::OrdinalIgnoreCase) } |
-          Stop-Process -Force -ErrorAction SilentlyContinue
-      }
-    }
-  }
+  } catch { Write-Note "Couldn't read the Kiwix release list - using $kiwixZipName." }
+  $zip = Join-Path $env:TEMP $kiwixZipName
+  Download "$kiwixBase$kiwixZipName" $zip
+  $tmpExtract = Join-Path $env:TEMP 'aiportable-kiwix-extract'
+  if (Test-Path $tmpExtract) { Remove-Item $tmpExtract -Recurse -Force }
+  Expand-Archive -Path $zip -DestinationPath $tmpExtract -Force
+  $serve = Get-ChildItem -Path $tmpExtract -Recurse -Filter 'kiwix-serve.exe' | Select-Object -First 1
+  if (-not $serve) { Fail "kiwix-serve.exe was not found in $kiwixZipName." }
+  # kiwix-serve.exe plus the DLLs next to it (the archive also has other tools).
+  Copy-Item -Path $serve.FullName -Destination $kiwixDir -Force
+  Copy-Item -Path (Join-Path $serve.DirectoryName '*.dll') -Destination $kiwixDir -Force -ErrorAction SilentlyContinue
+  Remove-Item $zip, $tmpExtract -Recurse -Force -ErrorAction SilentlyContinue
+  Write-Ok "kiwix-serve installed in resources\kiwix\win ($kiwixZipName)"
 }
 
 # ---------------------------------------------------------------------------
-# 6. Optional voice input (whisper.cpp)
+# 5. Voice input (whisper.cpp)
 # ---------------------------------------------------------------------------
-if ($WithVoice) {
-  Write-Step "Installing optional voice input (whisper.cpp server + base.en model)"
-  $whisperDir = Join-Path $root 'resources\whisper\win'
+$whisperDir = Join-Path $root 'resources\whisper\win'
+if ($NoVoice) {
+  Write-Step "Skipping voice input (-NoVoice)"
+} else {
+  Write-Step "Setting up voice input (whisper.cpp server + base.en model) - about 150 MB"
   New-Item -ItemType Directory -Force -Path $whisperDir | Out-Null
 
   if (Test-Path (Join-Path $whisperDir 'whisper-server.exe')) {
@@ -327,13 +395,13 @@ if ($WithVoice) {
     # attached, so pick the newest release that actually has the Windows zip.
     Write-Host "    Looking up the newest whisper.cpp release with Windows binaries..."
     try {
-      $releases = Invoke-RestMethod -Uri 'https://api.github.com/repos/ggml-org/whisper.cpp/releases?per_page=30' -UseBasicParsing -Headers @{ 'User-Agent' = 'AIPortable-JustAI-setup' }
+      $releases = Invoke-RestMethod -Uri 'https://api.github.com/repos/ggml-org/whisper.cpp/releases?per_page=30' -UseBasicParsing -Headers @{ 'User-Agent' = "$AppName-setup" }
     } catch {
       Fail "Could not reach the GitHub API to find a whisper.cpp release: $($_.Exception.Message)"
     }
     $asset = $releases | Where-Object { -not $_.draft } | ForEach-Object { $_.assets } |
       Where-Object { $_.name -eq 'whisper-bin-x64.zip' } | Select-Object -First 1
-    if (-not $asset) { Fail "No whisper.cpp release with whisper-bin-x64.zip was found. Get it manually from https://github.com/ggml-org/whisper.cpp/releases (see resources\whisper\win\PLACE_BINARY_HERE.txt)." }
+    if (-not $asset) { Fail "No whisper.cpp release with whisper-bin-x64.zip was found. Get it manually from https://github.com/ggml-org/whisper.cpp/releases (see resources\whisper\win\PLACE_BINARY_HERE.txt), or re-run with -NoVoice." }
     $zip = Join-Path $env:TEMP 'whisper-bin-x64.zip'
     Download $asset.browser_download_url $zip
     $tmpExtract = Join-Path $env:TEMP 'aiportable-whisper-extract'
@@ -359,7 +427,69 @@ if ($WithVoice) {
 }
 
 # ---------------------------------------------------------------------------
-# 7. Verify
+# 6. Runtime data folders
+# ---------------------------------------------------------------------------
+Write-Step "Creating empty runtime data folders"
+foreach ($folder in @('data\models', 'data\library')) {
+  New-Item -ItemType Directory -Force -Path (Join-Path $root $folder) | Out-Null
+}
+Write-Ok "data\models and data\library ready (chats.db / library.db are created on first launch)"
+
+# ---------------------------------------------------------------------------
+# 7. Models
+# ---------------------------------------------------------------------------
+if ($SkipModels) {
+  Write-Step "Skipping model downloads (-SkipModels)"
+} else {
+  Write-Step "Downloading models into data\models"
+  $ollamaCmd = $null
+  if (Test-Path $ollamaExe) { $ollamaCmd = $ollamaExe }
+  elseif (Get-Command ollama -ErrorAction SilentlyContinue) { $ollamaCmd = (Get-Command ollama).Source }
+
+  if (-not $ollamaCmd) {
+    Write-Note "No Ollama binary available - download models later from Tools -> Models inside the app."
+  } else {
+    $alreadyRunning = $false
+    try { Invoke-WebRequest -Uri 'http://127.0.0.1:11434/api/tags' -UseBasicParsing -TimeoutSec 2 | Out-Null; $alreadyRunning = $true } catch { }
+
+    $serverProc = $null
+    if ($alreadyRunning) {
+      Write-Note "Another Ollama is already running on port 11434, so models will go wherever THAT instance stores them, not data\models. Quit it (tray icon -> Quit) and re-run if you want them in the portable folder."
+    } else {
+      # Same OLLAMA_MODELS the app sets in main.js, so the models land in the
+      # portable data\models folder and travel with the app.
+      $env:OLLAMA_MODELS = $modelsDir
+      Write-Host "    Starting a temporary Ollama server..."
+      $serverProc = Start-Process -FilePath $ollamaCmd -ArgumentList 'serve' -WindowStyle Hidden -PassThru
+    }
+    try {
+      $ready = $false
+      for ($i = 0; $i -lt 30; $i++) {
+        try { Invoke-WebRequest -Uri 'http://127.0.0.1:11434/api/tags' -UseBasicParsing -TimeoutSec 2 | Out-Null; $ready = $true; break } catch { Start-Sleep -Seconds 1 }
+      }
+      if (-not $ready) {
+        Write-Note "Ollama didn't start in time - download models later from Tools -> Models inside the app."
+      } else {
+        foreach ($m in @('nomic-embed-text:latest') + $chatModels) {
+          Write-Host "    ollama pull $m"
+          & $ollamaCmd pull $m
+          if ($LASTEXITCODE -eq 0) { Write-Ok "$m downloaded" } else { Write-Note "Downloading $m failed - you can get it later from Tools -> Models." }
+        }
+      }
+    } finally {
+      if ($serverProc -and -not $serverProc.HasExited) {
+        Stop-Process -Id $serverProc.Id -Force -ErrorAction SilentlyContinue
+        # ollama.exe spawns separate runner processes; don't leave them behind.
+        Get-Process -Name 'llama-server', 'ollama' -ErrorAction SilentlyContinue |
+          Where-Object { $_.Path -and $_.Path.StartsWith($ollamaDir, [StringComparison]::OrdinalIgnoreCase) } |
+          Stop-Process -Force -ErrorAction SilentlyContinue
+      }
+    }
+  }
+}
+
+# ---------------------------------------------------------------------------
+# 8. Verify
 # ---------------------------------------------------------------------------
 Write-Step "Verifying installation"
 $problems = 0
@@ -373,15 +503,24 @@ if (Test-SqliteLoads) { Write-Ok 'better-sqlite3 loads inside Electron' }
 else { Write-Host "    MISSING: better-sqlite3 does not load inside Electron - delete node_modules and re-run" -ForegroundColor Red; $problems++ }
 Check 'Renderer vendor assets'           (Join-Path $root 'src\renderer\vendor\pdf.mjs')
 if ($SkipOllama) { Check 'Portable Ollama' $ollamaExe -Optional } else { Check 'Portable Ollama' $ollamaExe }
-Check 'Voice input (whisper-server.exe)' (Join-Path $root 'resources\whisper\win\whisper-server.exe') -Optional
+Check 'Kiwix (ZIM search)'               $kiwixExe
+if ($NoVoice) { Check 'Voice input (whisper-server.exe)' (Join-Path $whisperDir 'whisper-server.exe') -Optional }
+else {
+  Check 'Voice input (whisper-server.exe)' (Join-Path $whisperDir 'whisper-server.exe')
+  Check 'Voice model (model.bin)'          (Join-Path $whisperDir 'model.bin')
+}
+if (-not $SkipModels) {
+  if (Test-ModelInstalled 'nomic-embed-text:latest') { Write-Ok 'Search model (nomic-embed-text)' } else { Write-Note 'Search model (nomic-embed-text) - not downloaded; get it in Tools -> Models' }
+  foreach ($m in $chatModels) { if (Test-ModelInstalled $m) { Write-Ok "Chat model $m" } else { Write-Note "Chat model $m - not downloaded; get it in Tools -> Models" } }
+}
 
 if ($problems -gt 0) { Fail "$problems required component(s) missing - see above, fix, and re-run this script." }
 
 Write-Step "Setup complete"
 Write-Host ""
-Write-Host "Launch the app:" -ForegroundColor Cyan
-Write-Host "  - Double-click AIPortable-JustAI.vbs (no console window), or"
-Write-Host "  - Start-AIPortable-JustAI-With-Console.bat (shows log output)"
-Write-Host ""
-Write-Host "Then open Tools/Settings -> Models and pull a chat model (e.g. qwen2.5:3b)." -ForegroundColor Cyan
-Write-Host "See SETUP.md for the full walkthrough."
+Write-Host "Start the app any time by double-clicking $AppName.vbs" -ForegroundColor Cyan
+Write-Host "(or Start-$AppName-With-Console.bat to see its log)."
+if (-not $NoLaunch) {
+  $go = Read-Host "Start $AppName now? (Y/n)"
+  if ($go -notmatch '^[nN]') { Start-Process -FilePath 'wscript.exe' -ArgumentList "`"$(Join-Path $root "$AppName.vbs")`"" }
+}
