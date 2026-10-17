@@ -87,6 +87,8 @@ function imageDataUrl(base64) {
 // with images carries a content *array* of text + image_url parts.
 function toOpenAIMessages(messages) {
   return messages.map((m) => {
+    // Tool-calling turns (Thorough ZIM search) carry these through as-is.
+    if (m.tool_calls || m.tool_call_id) return { role: m.role, content: m.content, ...(m.tool_calls ? { tool_calls: m.tool_calls } : {}), ...(m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}) };
     if (!m.images?.length) return { role: m.role, content: m.content };
     const parts = [];
     if (m.content) parts.push({ type: 'text', text: m.content });
@@ -186,7 +188,8 @@ class LMStudioManager {
   async getModelCapabilities(name) {
     try {
       const all = await this.listAll();
-      return { vision: !!all.find((m) => m.key === name)?.capabilities?.vision };
+      const caps = all.find((m) => m.key === name)?.capabilities;
+      return { vision: !!caps?.vision, tools: !!caps?.trained_for_tool_use };
     } catch {
       return { vision: false };
     }
@@ -229,6 +232,20 @@ class LMStudioManager {
       body: { model, ...(numCtx ? { context_length: numCtx } : {}) },
     });
     return entry;
+  }
+
+  // The "Load model" button: an explicit request to load, so it loads even
+  // with Auto-load off or LM Studio's JIT loading on (where ensureLoaded
+  // would leave loading to the first chat).
+  async loadModel(model, options) {
+    const entry = (await this.listAll()).find((m) => m.key === model);
+    if (!entry) throw new Error(`"${model}" wasn't found in LM Studio — it may have been renamed or deleted.`);
+    if ((entry.loaded_instances || []).length > 0) return true;
+    await request('/api/v1/models/load', {
+      method: 'POST',
+      body: { model, ...(options?.num_ctx ? { context_length: options.num_ctx } : {}) },
+    });
+    return true;
   }
 
   // Streams OpenAI SSE chunks, forwarding each content delta to `onToken` in
@@ -338,6 +355,41 @@ class LMStudioManager {
     } catch {
       return null;
     }
+  }
+
+  // Best-effort, like OllamaManager.searchKeywords — null on any failure.
+  async searchKeywords(model, messages, options) {
+    try {
+      return await this.complete(model, messages, options);
+    } catch {
+      return null;
+    }
+  }
+
+  // Same contract as OllamaManager.chatTools. Never thinks, like complete():
+  // each research step is a small decision, not the answer itself.
+  async chatTools(model, messages, tools, options) {
+    const entry = await this.ensureLoaded(model, options?.num_ctx);
+    const effort = reasoningEffort(entry, false);
+    const res = await request('/v1/chat/completions', {
+      method: 'POST',
+      body: { model, messages: toOpenAIMessages(messages), tools, stream: false, ...(effort ? { reasoning_effort: effort } : {}) },
+    });
+    const msg = res?.choices?.[0]?.message || {};
+    const toolCalls = (msg.tool_calls || []).map((c) => {
+      let args = {};
+      try { args = JSON.parse(c.function?.arguments || '{}'); } catch { /* leave empty */ }
+      return { id: c.id, name: c.function?.name, args };
+    });
+    return {
+      content: msg.content || '',
+      toolCalls,
+      assistantMessage: { role: 'assistant', content: msg.content || '', ...(msg.tool_calls?.length ? { tool_calls: msg.tool_calls } : {}) },
+    };
+  }
+
+  toolResultMessage(call, content) {
+    return { role: 'tool', tool_call_id: call.id, content };
   }
 
   // Best-effort, like OllamaManager.identifyImage — null on any failure.

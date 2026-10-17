@@ -8,6 +8,7 @@ const os = require('os');
 const { initDb, getDb } = require('./db');
 const { OllamaManager, HOST: OLLAMA_HOST, PORT: OLLAMA_PORT } = require('./services/ollama');
 const { LMStudioManager } = require('./services/lmstudio');
+const { ZimSearch, PORT: ZIM_SEARCH_PORT } = require('./services/zimSearch');
 const { ModelDownloader, TIERS: CATALOG_TIERS } = require('./services/modelCatalog');
 const { MobileServer } = require('./services/mobileServer');
 const { VoiceInput } = require('./services/voiceInput');
@@ -213,6 +214,16 @@ function getLmstudioThinking() {
 }
 
 // Whether the *chat* runtime is reachable — what the status dot shows.
+// kiwix-serve for searching .zim archives from chat (services/zimSearch.js).
+// JustAI has no Wikipedia viewer, so this is its only kiwix process.
+const zimSearch = new ZimSearch();
+function findBundledKiwix() {
+  const platDir = process.platform === 'win32' ? 'win' : process.platform === 'darwin' ? 'mac' : 'linux';
+  const exe = process.platform === 'win32' ? 'kiwix-serve.exe' : 'kiwix-serve';
+  const candidate = path.join(getResourcesDir(), 'kiwix', platDir, exe);
+  return fs.existsSync(candidate) ? candidate : null;
+}
+
 async function runtimeReady() {
   if (getLlmBackend() === 'lmstudio') return (await lmstudio.checkConnection()).connected;
   return ollamaReady();
@@ -393,9 +404,11 @@ function killStragglers() {
           // killing by name would take down instances that aren't ours.
           // stopOllama() already tree-kills our own server and its runners by PID.
           ['taskkill', ['/F', '/T', '/IM', 'whisper-server.exe']],
+          ['taskkill', ['/F', '/T', '/IM', 'kiwix-serve.exe']],
         ]
       : [
           ['pkill', ['-f', 'whisper-server']],
+          ['pkill', ['-f', 'kiwix-serve']],
         ];
 
   const waits = targets.map(
@@ -452,6 +465,7 @@ async function performShutdown(keepModelsLoaded) {
     }
     mobileServer?.stop();
     voiceInput?.stopServer();
+    await zimSearch.stop(); // holds no model state worth keeping resident — always tear it down
     try { getDb()?.close(); } catch { /* already closed */ }
     return;
   }
@@ -465,6 +479,7 @@ async function performShutdown(keepModelsLoaded) {
   mobileServer?.stop();
   voiceInput?.stopServer();
   await stopOllama();
+  await zimSearch.stop();
   await killStragglers();
   try { getDb()?.close(); } catch { /* already closed */ }
 }
@@ -669,6 +684,9 @@ app.whenReady().then(async () => {
   registerResearchProtocol();
 
   ollama = new OllamaManager();
+  // A request needing a bigger context than the model is loaded with makes
+  // Ollama reload it — tell the UI so the wait isn't a mystery (see fitOptions).
+  ollama.onReload = (info) => win?.webContents.send('model-reload', info);
   lmstudio = new LMStudioManager({ getAutoLoad: getLmstudioAutoLoad, getThinking: getLmstudioThinking });
   downloader = new ModelDownloader(ollama, dataDir);
   // The phone server only needs the current model + chatStream, routed to
@@ -790,6 +808,7 @@ ipcMain.handle('chat:save-assistant-message', (e, { chatId, content }) => {
 
 // Both runtimes, since a utility stream may be on the other one (see visionBackend).
 ipcMain.handle('chat:abort', () => {
+  zimSearch.cancel();
   const a = ollama.abortGeneration();
   const b = lmstudio.abortGeneration();
   return a || b;
@@ -879,10 +898,26 @@ ipcMain.handle('catalog:set-selected-tiers', (e, tiers) => {
 
 ipcMain.handle('settings:context-size-presets', () => CONTEXT_SIZE_PRESETS);
 ipcMain.handle('settings:get-context-size', () => getContextSize());
-ipcMain.handle('settings:set-context-size', (e, size) => {
+// A loaded Ollama model keeps the context it was loaded with until it needs
+// a bigger one (see fitOptions in ollama.js), so a new setting wouldn't take
+// effect for it. If the chat model is loaded at a different size, unload it:
+// the next message (or Load model) loads it at the new size.
+// LM Studio fixes context at load time too, but its models are managed in
+// LM Studio itself, so they're left alone.
+ipcMain.handle('settings:set-context-size', async (e, size) => {
   hostSettings.contextSize = CONTEXT_SIZE_PRESETS.includes(size) ? size : null;
   saveHostSettings();
-  return getContextSize();
+  const chosen = getContextSize();
+  let unloaded = null;
+  const model = ollama.getCurrentModel();
+  if (getLlmBackend() === 'ollama' && model) {
+    const resident = (await ollama.getRunningModels()).find((m) => m.name === model);
+    if (resident && resident.context_length !== chosen) {
+      await ollama.unloadModel(model);
+      unloaded = model;
+    }
+  }
+  return { size: chosen, unloaded };
 });
 
 // ---------------------------------------------------------------------------
@@ -1011,6 +1046,83 @@ ipcMain.handle('library:reset', async (e, { scope } = {}) => {
     getDb().pragma('lib.wal_checkpoint(TRUNCATE)'); // in WAL mode the shrink only lands on disk at checkpoint
   } catch { /* space is reclaimed on a later reset */ }
   return { ok: true, removed, backupPath, trashFailed };
+});
+
+// ---------------------------------------------------------------------------
+// IPC — ZIM search for chat (services/zimSearch.js)
+//
+// Every .zim in the Research library's _sources\zim folder is searchable.
+// The ticked set and Quick/Thorough mode are remembered per chat only
+// (chats.zim_settings) — the app and new chats start with none.
+// ---------------------------------------------------------------------------
+function zimSearchFolders() {
+  const research = getResearchRoot();
+  return research ? [path.join(research, '_sources', 'zim')] : [];
+}
+
+async function ensureZimSearch() {
+  return zimSearch.ensureRunning(ZimSearch.scanFolders(zimSearchFolders()), findBundledKiwix());
+}
+
+ipcMain.handle('zim:list-searchable', async () => {
+  const ok = await ensureZimSearch();
+  const books = ok ? await zimSearch.listBooks() : [];
+  return {
+    books: books.map(({ id, title, ftindex, articles }) => ({ id, title, ftindex, articles })).sort((a, b) => a.title.localeCompare(b.title)),
+  };
+});
+
+// "Load model" button (and the step before a ZIM search): loads the chat
+// model ahead of the first question. `zim` also starts the search server
+// alongside, so both waits overlap instead of adding up.
+ipcMain.handle('chat:load-model', async (e, { model, options, zim }) => {
+  const [loaded] = await Promise.allSettled([chatBackend().loadModel(model, options), zim ? ensureZimSearch() : null]);
+  if (loaded.status === 'rejected') return { success: false, error: loaded.reason?.message || String(loaded.reason) };
+  return { success: true };
+});
+
+// titles let a reopened chat name its archives without starting the search server.
+ipcMain.handle('zim:save-settings', (e, { chatId, books, mode, titles }) => {
+  const settings = { books: Array.isArray(books) ? books : [], mode: mode === 'thorough' ? 'thorough' : 'quick', titles: titles || {} };
+  if (chatId) getDb().prepare('UPDATE chats SET zim_settings = ? WHERE id = ?').run(JSON.stringify(settings), chatId);
+  return { success: true };
+});
+
+// Thorough needs a model that can call tools; anything else quietly gets
+// Quick, and `fellBack` lets the chat say so.
+ipcMain.handle('zim:context', async (event, { model, question, previous, books, mode, options }) => {
+  if (!(await ensureZimSearch())) return { text: '', sources: [], steps: ['ZIM search unavailable'] };
+  const backend = chatBackend();
+  const args = { backend, model, question, previous, bookIds: books, options };
+  if (mode === 'thorough') {
+    const caps = await backend.getModelCapabilities(model);
+    if (caps.tools) return zimSearch.thorough({ ...args, onStep: (s) => event.sender.send('zim-step', s) });
+    return { ...(await zimSearch.quick(args)), fellBack: true };
+  }
+  return zimSearch.quick(args);
+});
+
+// A ZIM source clicked in chat: JustAI has no Wikipedia viewer, so the
+// article opens in a small window of its own, served by the same search
+// kiwix-serve (it has every archive loaded). Only 127.0.0.1 pages may load
+// there — links out of the archive are ignored rather than going online.
+let zimArticleWindow = null;
+ipcMain.handle('zim:open-article', async (e, { url, title }) => {
+  if (!/^\/content\//.test(url || '') || !(await ensureZimSearch())) return { success: false };
+  const viewerUrl = `http://127.0.0.1:${ZIM_SEARCH_PORT}/viewer#${url.replace(/^\/content\//, '')}`;
+  if (!zimArticleWindow || zimArticleWindow.isDestroyed()) {
+    zimArticleWindow = new BrowserWindow({
+      width: 1000, height: 800, parent: win, title: title || 'Article', autoHideMenuBar: true,
+      webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+    });
+    const local = (u) => u.startsWith(`http://127.0.0.1:${ZIM_SEARCH_PORT}/`);
+    zimArticleWindow.webContents.on('will-navigate', (ev, u) => { if (!local(u)) ev.preventDefault(); });
+    zimArticleWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  }
+  await zimArticleWindow.loadURL(viewerUrl);
+  zimArticleWindow.show();
+  zimArticleWindow.focus();
+  return { success: true };
 });
 
 // ---------------------------------------------------------------------------

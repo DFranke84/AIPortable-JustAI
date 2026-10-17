@@ -37,6 +37,7 @@
             <span id="status-text">Starting model runtime…</span>
             <span id="model-load-dot" class="model-load-dot" title="Model not loaded in memory yet"></span>
             <span id="model-load-text" class="model-load-text hidden"></span>
+            <button id="model-load-btn" type="button" class="pull-btn model-load-btn hidden" title="Load the selected model into memory now, so your first question is answered faster">Load model</button>
           </div>
           <div class="topbar-actions">
             <select id="model-select" class="model-select"></select>
@@ -62,11 +63,32 @@
         </div>
 
         <div id="attachments-row" class="attachments-row hidden"></div>
+        <div id="zim-summary" class="zim-summary hidden">
+          <span id="zim-summary-text" class="zim-summary-text"></span>
+          <button id="zim-summary-change" type="button" class="pull-btn">Change</button>
+          <button id="zim-summary-clear" type="button" class="pull-btn">Clear</button>
+        </div>
+        <div id="zim-picker" class="zim-picker hidden">
+          <div class="zim-picker-head">
+            <span class="zim-picker-title">Search these ZIM archives when answering</span>
+            <div class="zim-mode" role="radiogroup" aria-label="Search mode">
+              <label title="One search, works with every model — fast"><input type="radio" name="zim-mode" value="quick" checked /> Quick</label>
+              <label title="The AI searches until satisfied — smarter but slower; needs a tool-calling model (Qwen, Llama 3.1+), others use Quick"><input type="radio" name="zim-mode" value="thorough" /> Thorough</label>
+            </div>
+          </div>
+          <div id="zim-picker-list" class="zim-picker-list"></div>
+          <div class="zim-picker-foot">
+            <span id="zim-picker-note" class="panel-hint"></span>
+            <button id="zim-picker-none" type="button" class="pull-btn">None</button>
+            <button id="zim-picker-done" type="button" class="pull-btn">Done</button>
+          </div>
+        </div>
         <form id="composer" class="composer">
           <button id="attach-btn" type="button" class="btn-icon" title="Attach a file (image, PDF, Word, text) — or drop one here">📁</button>
           <input id="attach-file" type="file" multiple accept="image/png,image/jpeg,image/gif,image/webp,image/bmp,.pdf,.txt,.md,.docx,.doc" hidden />
           <button id="mic-btn" type="button" class="btn-icon mic" title="Voice input">🎤</button>
           <button id="rag-toggle" type="button" class="btn-icon" title="Use library context (RAG)">📚</button>
+          <button id="zim-toggle" type="button" class="btn-icon" title="Search ZIM archives (Wikipedia, MedlinePlus…) when answering">🗃️</button>
           <textarea id="input" placeholder="Message your model…" rows="1"></textarea>
           <button id="send" type="submit" class="btn-send" disabled>Send</button>
         </form>
@@ -308,8 +330,12 @@
             while a larger card can afford to go bigger. "Auto" leaves this to Ollama, which
             sizes it from available VRAM and can be as small as 4K — often too little once
             an image, document, or long chat history is involved.
+            Messages using 📚, 🗃️, an image or a document always get at least 16K. A loaded
+            model is only reloaded when a message needs more room than it was loaded with —
+            the app shows "Reloading model for a larger context" when that happens.
           </p>
           <div id="context-size-list" class="tier-select-list"></div>
+          <p id="context-size-note" class="panel-hint"></p>
 
           <h4 class="panel-subhead">Catalog</h4>
           <p class="panel-hint">

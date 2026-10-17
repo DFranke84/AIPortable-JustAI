@@ -1,0 +1,8 @@
+Optional — only needed for the chat's ZIM archive search (the 🗃️ button).
+
+Place a kiwix-tools build here:
+  resources/kiwix/linux/kiwix-serve
+
+Get binaries from: https://download.kiwix.org/release/kiwix-tools/
+Without this, ZIM search just finds no archives — everything else
+in the app works fine.

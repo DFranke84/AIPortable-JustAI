@@ -25,6 +25,15 @@ folder that you can move or carry on a USB drive.
   answers in them. Search is keyword (FTS5) plus semantic, using
   `nomic-embed-text`. **📖 Reference Library** browses everything you've
   added.
+- **ZIM archives (🗃️):** tick .zim archives (Wikipedia, MedlinePlus,
+  StackExchange…) from the Research library's `_sources/zim` folder and the
+  AI searches them before answering, using each archive's own search index
+  through a bundled `kiwix-serve` (127.0.0.1 only). **Quick** = one search,
+  any model; **Thorough** = tool-calling models search and open articles
+  themselves. Sources open in a small article window. Saved per chat.
+- **Load model** button: load the selected model before the first question;
+  a reload for a larger context is shown on screen when it happens.
+- Replies display as formatted text (bold, lists, tables).
 - **Analyze Image:** identify what's in a photo, cross-referenced against
   your library.
 - **Translate:** typed text, or text inside an image.
@@ -51,7 +60,7 @@ AIPortable-JustAI/
 ├─ src/main/                                  Electron main process + services
 ├─ src/renderer/                              UI (HTML/CSS/JS)
 ├─ data/                                      Model catalogs; runtime data is created here
-└─ resources/{ollama,whisper}/{win,linux}/    Downloaded binaries go here
+└─ resources/{ollama,whisper,kiwix}/{win,linux}/  Binaries go here
 ```
 
 Created by setup or at runtime, and not shipped: `node_modules/`,

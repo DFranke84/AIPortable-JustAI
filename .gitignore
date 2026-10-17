@@ -16,3 +16,5 @@ data/*
 
 # Large media (feature tour video etc.)
 *.mp4
+resources/kiwix/*/*
+!resources/kiwix/*/PLACE_BINARY_HERE.txt
