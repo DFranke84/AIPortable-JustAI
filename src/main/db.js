@@ -144,6 +144,12 @@ function initDb(dbPath, libraryDbPath) {
 
   db.exec(`CREATE INDEX IF NOT EXISTS lib.idx_library_docs_content_hash ON library_docs(content_hash);`);
   db.exec(`CREATE INDEX IF NOT EXISTS lib.idx_library_docs_source ON library_docs(source);`);
+  // Your own uploads (not the bulk-imported/Research docs) — keeps the
+  // start-up migration check (Library.backfillChunks) from scanning every doc.
+  db.exec(`CREATE INDEX IF NOT EXISTS lib.idx_library_docs_uploads ON library_docs(id) WHERE external_id IS NULL;`);
+  // (source, id) lets the Research status count (shown as the window opens) be
+  // answered from the index alone: 1.4 s -> 8 ms on 19,795 pages.
+  db.exec(`CREATE INDEX IF NOT EXISTS lib.idx_library_docs_source_id ON library_docs(source, id);`);
 
   // Small key/value store that lives inside library.db (so it travels with
   // the index if library.db is copied to another app) — e.g. the
