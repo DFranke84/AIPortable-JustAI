@@ -463,3 +463,9 @@ button, input, select, textarea { font-family: inherit; }
 .md th { background: var(--panel-raised); }
 .md hr { border: none; border-top: 1px solid var(--border); margin: 1em 0; }
 .md .md-link { text-decoration: underline dotted; text-underline-offset: 2px; }
+
+/* ZIM archive folders (Tools → Library) */
+.zim-folder-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+.zim-folder-row { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; }
+.zim-folder-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.zim-folder-row .pull-btn { flex-shrink: 0; }

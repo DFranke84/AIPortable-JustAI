@@ -95,6 +95,37 @@ function htmlToBlocks(html) {
 
 const SKIP_SECTIONS = /^(references|sources|citations|notes|bibliography|see also|external links|further reading|related (topics|issues|information)|review date)/i;
 
+function killPid(pid) {
+  if (!pid) return;
+  try {
+    if (process.platform === 'win32') spawn('taskkill', ['/F', '/T', '/PID', String(pid)], { stdio: 'ignore', windowsHide: true });
+    else process.kill(pid, 'SIGKILL');
+  } catch { /* already gone */ }
+}
+
+// PIDs with a listening socket on `port` (netstat on Windows, lsof elsewhere).
+function pidsListeningOn(port) {
+  return new Promise((resolve) => {
+    const [cmd, args] = process.platform === 'win32' ? ['netstat', ['-ano', '-p', 'TCP']] : ['lsof', ['-t', `-iTCP:${port}`, '-sTCP:LISTEN']];
+    let out = '';
+    try {
+      const child = spawn(cmd, args, { windowsHide: true });
+      child.stdout.on('data', (c) => (out += c));
+      child.on('error', () => resolve([]));
+      child.on('close', () => {
+        if (process.platform !== 'win32') return resolve(out.split(/\s+/).filter(Boolean).map(Number));
+        const pids = out.split(/\r?\n/)
+          .map((l) => l.trim().split(/\s+/))
+          .filter((c) => c[0] === 'TCP' && /LISTENING/i.test(c[3]) && c[1].endsWith(`:${port}`))
+          .map((c) => Number(c[4]));
+        resolve([...new Set(pids)].filter((p) => p && p !== process.pid));
+      });
+    } catch {
+      resolve([]);
+    }
+  });
+}
+
 const STOPWORDS = new Set('the a an and or of to in on for with without is are was be how what why when which do does can i my me we our you your it its this that there from by at as about into should would will get have has'.split(' '));
 function terms(query) {
   return query.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2 && !STOPWORDS.has(w));
@@ -122,27 +153,42 @@ class ZimSearch {
   // name, rather than restarting whenever the user ticks a different set:
   // kiwix-serve opens archives lazily, so all ~30 of Dave's start in ~7s
   // using ~17 MB. Only restarts when the set of files on disk changes.
-  async ensureRunning(zimPaths, bin) {
+  // Calls are queued: two at once (Load model + opening the 🗃️ list) would
+  // otherwise both decide to restart and race each other for the port.
+  ensureRunning(zimPaths, bin) {
+    this.queue = (this.queue || Promise.resolve()).then(() => this._ensureRunning(zimPaths, bin), () => this._ensureRunning(zimPaths, bin));
+    return this.queue;
+  }
+
+  async _ensureRunning(zimPaths, bin) {
     const wanted = zimPaths.map((p) => path.resolve(p)).sort();
     const same = wanted.length === this.paths.length && wanted.every((p, i) => p === this.paths[i]);
     if (this.process && same && (await this.isReady())) return true;
-    if (this.process) await this.stop();
+    await this.stop();
     if (!bin || !wanted.length) return false;
+    // Something still answering on the port would be mistaken for the new
+    // process (isReady only checks that *something* answers) and keep
+    // serving its old set of files — e.g. one that outlived its stop().
+    if (!(await this.freePort())) return false;
 
     this.paths = wanted;
     this.books = null;
+    let proc;
     try {
       // --address keeps it off the local network — only this app talks to it.
-      this.process = spawn(bin, ['--address=127.0.0.1', `--port=${PORT}`, ...wanted], { stdio: 'ignore', windowsHide: true });
-      this.process.on('error', (err) => console.error('Failed to spawn kiwix-serve (search):', err.message));
-      this.process.on('exit', () => { this.process = null; });
+      proc = spawn(bin, ['--address=127.0.0.1', `--port=${PORT}`, ...wanted], { stdio: 'ignore', windowsHide: true });
+      proc.on('error', (err) => console.error('Failed to spawn kiwix-serve (search):', err.message));
+      // Only forget the process this exit belongs to — an old one exiting
+      // late must not wipe out the reference to its replacement.
+      proc.on('exit', () => { if (this.process === proc) this.process = null; });
+      this.process = proc;
     } catch (err) {
       console.error('Could not start kiwix-serve (search):', err.message);
       return false;
     }
     for (let i = 0; i < 100; i++) {
       await new Promise((r) => setTimeout(r, 300));
-      if (!this.process) return false;
+      if (this.process !== proc) return false;
       if (await this.isReady()) return true;
     }
     return false;
@@ -151,14 +197,27 @@ class ZimSearch {
   stop() {
     return new Promise((resolve) => {
       const proc = this.process;
+      this.process = null;
       this.paths = [];
       this.books = null;
-      if (!proc || proc.killed) { this.process = null; resolve(); return; }
-      const done = () => { this.process = null; resolve(); };
+      if (!proc || proc.exitCode !== null) { resolve(); return; }
+      let finished = false;
+      const done = () => { if (!finished) { finished = true; resolve(); } };
       proc.once('exit', done);
       proc.kill();
-      setTimeout(done, 2000);
+      setTimeout(() => { killPid(proc.pid); setTimeout(done, 500); }, 4000); // didn't exit: force it
     });
+  }
+
+  // Makes sure nothing is listening on PORT before a new kiwix-serve starts.
+  // Kills by the port's owning PID, never by name: AIPortable's Wikipedia
+  // viewer runs another kiwix-serve.exe on 8098 that must be left alone.
+  async freePort() {
+    for (let i = 0; i < 10 && (await this.isReady()); i++) {
+      for (const pid of await pidsListeningOn(PORT)) killPid(pid);
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    return !(await this.isReady());
   }
 
   // [{ id, title, file, ftindex, articles }] — id is the /content/<id> name
@@ -490,4 +549,4 @@ function parseKeywords(raw, question) {
   return { topic: topic || null, query: [topic, rest].filter(Boolean).join(' ') };
 }
 
-module.exports = { ZimSearch, HOST, PORT, htmlToBlocks, cleanQuery, parseKeywords };
+module.exports = { ZimSearch, HOST, PORT, htmlToBlocks, cleanQuery, parseKeywords, killPid, pidsListeningOn };

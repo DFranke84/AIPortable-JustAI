@@ -34,6 +34,8 @@ const els = {
   zimSummaryText: document.getElementById('zim-summary-text'),
   zimSummaryChange: document.getElementById('zim-summary-change'),
   zimSummaryClear: document.getElementById('zim-summary-clear'),
+  zimFolderList: document.getElementById('zim-folder-list'),
+  zimFolderAdd: document.getElementById('zim-folder-add'),
   themeToggle: document.getElementById('theme-toggle'),
   attachBtn: document.getElementById('attach-btn'),
   attachFile: document.getElementById('attach-file'),
@@ -934,9 +936,11 @@ function readableZimId(id) {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+// Rescanned every time the picker opens, so new files, deleted files and
+// changed folder settings always show — cheap once kiwix-serve is running,
+// which only restarts when the set of files actually changed.
 async function loadZimBooks() {
-  if (zimBookList) return zimBookList;
-  els.zimPickerList.textContent = 'Starting the archive search…';
+  if (!zimBookList) els.zimPickerList.textContent = 'Starting the archive search…';
   const { books } = await window.localAI.zimListSearchable();
   zimBookList = books;
   for (const b of books) zimTitles[b.id] = b.title;
@@ -948,7 +952,7 @@ async function loadZimBooks() {
 function renderZimPicker() {
   els.zimPickerList.innerHTML = '';
   if (!zimBookList.length) {
-    els.zimPickerList.textContent = 'No .zim files found — add them to the Research library\'s _sources\\zim folder (Tools → Library connects the Research library).';
+    els.zimPickerList.textContent = 'No .zim files found — check the ZIM archive folders in Tools → Library.';
     return;
   }
   for (const b of zimBookList) {
@@ -967,7 +971,9 @@ function renderZimPicker() {
     const meta = document.createElement('span');
     meta.className = 'zim-meta';
     const count = b.articles >= 1e6 ? `${(b.articles / 1e6).toFixed(1)}M` : b.articles >= 1e3 ? `${Math.round(b.articles / 1e3)}K` : String(b.articles);
-    meta.textContent = b.ftindex ? count : `${count} · titles only`;
+    const twin = zimBookList.filter((x) => x.title === b.title).length > 1;
+    meta.textContent = [count, b.date, b.ftindex ? null : 'titles only', twin && b.folder ? b.folder : null].filter(Boolean).join(' · ');
+    if (b.folder) label.title += `\n${b.folder}`;
     label.append(box, name, meta);
     els.zimPickerList.appendChild(label);
   }
@@ -1009,6 +1015,60 @@ els.zimSummaryClear.onclick = () => {
   state.zimBooks = [];
   updateZimToggle();
   saveZimSettings();
+};
+
+// ---- ZIM archive folders (Tools → Library) ----
+// Which folders the 🗃️ list is built from: automatic ones (switchable) plus
+// folders the user adds. Any change empties the cached archive list so the
+// next 🗃️ open rescans (and kiwix-serve restarts with the new set).
+function renderZimFolders(folders) {
+  els.zimFolderList.innerHTML = '';
+  for (const fo of folders) {
+    const row = document.createElement('div');
+    row.className = 'zim-folder-row';
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = fo.enabled;
+    box.disabled = !fo.auto; // added folders are switched off by removing them
+    box.title = fo.auto ? 'Search this folder' : 'Added folders are always searched — use Remove to stop';
+    box.onchange = async () => {
+      renderZimFolders(await window.localAI.zimSetFolderEnabled({ key: fo.key, enabled: box.checked }));
+      zimBookList = null;
+    };
+    const text = document.createElement('div');
+    text.className = 'zim-folder-text';
+    const name = document.createElement('div');
+    name.textContent = fo.label || fo.path;
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = !fo.path ? 'Not connected — set the Research folder above'
+      : !fo.exists ? `${fo.path} — not found (drive not plugged in?)`
+      : `${fo.label ? `${fo.path} · ` : ''}${fo.count} archive${fo.count === 1 ? '' : 's'}`;
+    text.append(name, meta);
+    row.append(box, text);
+    if (!fo.auto) {
+      const rm = document.createElement('button');
+      rm.className = 'pull-btn';
+      rm.textContent = 'Remove';
+      rm.onclick = async () => {
+        renderZimFolders(await window.localAI.zimRemoveFolder(fo.path));
+        zimBookList = null;
+      };
+      row.append(rm);
+    }
+    els.zimFolderList.appendChild(row);
+  }
+}
+
+async function refreshZimFolders() {
+  renderZimFolders(await window.localAI.zimGetFolders());
+}
+
+els.zimFolderAdd.onclick = async () => {
+  const res = await window.localAI.zimAddFolder();
+  renderZimFolders(res.folders);
+  if (res.ok) zimBookList = null;
+  else if (res.error) await showAppAlert(res.error);
 };
 
 // Back to nothing ticked (new chat), or the chat's own saved choice.
@@ -1189,7 +1249,7 @@ function showTab(name) {
   els.tabs.forEach((t) => t.classList.toggle('active', t.dataset.tab === name));
   els.panels.forEach((p) => p.classList.toggle('active', p.id === `tab-${name}`));
   if (name === 'models') { refreshBackendControl(); refreshModelsLocation(); refreshCatalogTiers(); refreshContextSizeControl(); }
-  if (name === 'library') { refreshUploads(); populateCategorySelect(els.libraryUploadCategory, { allowNew: true }); refreshResearchStatus(); }
+  if (name === 'library') { refreshZimFolders(); refreshUploads(); populateCategorySelect(els.libraryUploadCategory, { allowNew: true }); refreshResearchStatus(); }
   if (name === 'mobile') { refreshMobileStatus(); }
   if (name === 'system') { refreshSystemInfo(); }
 }
@@ -1834,6 +1894,8 @@ els.researchChooseBtn.onclick = async () => {
   const res = await window.localAI.researchChooseRoot();
   if (!res.ok && !res.canceled) await showAppAlert(res.error);
   refreshResearchStatus();
+  refreshZimFolders(); // its _sources\zim folder moves with it
+  zimBookList = null;
 };
 
 window.localAI.onResearchSyncProgress((p) => {
