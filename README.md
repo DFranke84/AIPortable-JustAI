@@ -1,52 +1,119 @@
 # AIPortable-JustAI
 
-A portable, offline-first desktop AI assistant (Electron + [Ollama](https://ollama.com)).
+An AI assistant that runs entirely on your own computer: chat with local AI models, ask questions about your own
+documents, and let the AI search offline Wikipedia and other reference archives while it answers.
 
-Everything runs on your own machine. There's no account, no cloud calls, and
-no telemetry. The whole app, including its models and data, lives in one
-folder that you can move or carry on a USB drive.
+No account, no cloud, no telemetry. The whole app, including its models, chats and data, lives in **one folder**
+that you can move to another drive or carry on a USB stick. Runs on Windows and Linux.
 
-## Get started
+---
 
-| | |
-|---|---|
-| **Windows** | Double-click `Setup-Windows.bat`, then `AIPortable-JustAI.vbs` |
-| **Linux** | `bash scripts/setup-linux.sh`, then `./start-aiportable-justai.sh` |
+## How the apps fit together
 
-**→ Full step-by-step instructions, flags, manual install and troubleshooting: [SETUP.md](SETUP.md)**
+There are four separate downloads. They work on their own, and better together when they sit side by side in
+one folder.
 
-## Features
+| App | What it is | Do you need it? |
+|---|---|---|
+| **AIPortable** | Offline AI chat with your library, Wikipedia viewer and offline maps | Pick **one** of the two AI apps |
+| **AIPortable-JustAI** (this one) | The same AI chat without the maps and Wikipedia viewer (smaller) | Pick **one** of the two AI apps |
+| **Research** | A large offline reference library and Library Manager, the window for building it | Optional - adds a big searchable library to the AI |
+| **LibraryViewer** | A read-only copy of the Research library for an Android tablet | Optional |
 
-- **Chat** with any local Ollama model. Replies stream in, chats are saved
-  and auto-titled, and you can rename, delete, or export a chat to `.txt`.
-- **Attachments:** drop images (vision models), PDF, Word, or text files
-  onto the composer.
-- **Library (RAG):** upload your own documents and toggle 📚 to ground
-  answers in them. Search is keyword (FTS5) plus semantic, using
-  `nomic-embed-text`. **📖 Reference Library** browses everything you've
-  added.
-- **ZIM archives (🗃️):** tick .zim archives (Wikipedia, MedlinePlus,
-  StackExchange…) and the AI searches them before answering, using each archive's own search index
-  through a bundled `kiwix-serve` (127.0.0.1 only). Folders are set in
-  Tools → Library → ZIM archive folders: the Research library's `_sources/zim`
-  plus any you add. **Quick** = one search,
-  any model; **Thorough** = tool-calling models search and open articles
-  themselves. Sources open in a small article window. Saved per chat.
-- **Load model** button: load the selected model before the first question;
-  a reload for a larger context is shown on screen when it happens.
-- Replies display as formatted text (bold, lists, tables).
-- **Analyze Image:** identify what's in a photo, cross-referenced against
-  your library.
-- **Translate:** typed text, or text inside an image.
-- **Model catalog** by GPU VRAM tier (4/8/12/24/32 GB). These are plain JSON
-  files in `data/` that you can edit.
-- **Portable model storage** in `data/models`, with an optional per-PC
-  folder and two-way sync.
-- **Mobile sync:** chat from a phone on the same Wi-Fi network.
-- **Voice input** (optional): local speech-to-text through whisper.cpp.
-- Light/dark theme, adjustable context length, and a live Ollama log viewer.
+Most people use **either** AIPortable **or** JustAI, not both. Choose JustAI if you only want the AI chat;
+choose AIPortable if you also want offline maps and the built-in Wikipedia reader. Research and LibraryViewer
+are add-ons.
 
-## Folder layout
+Put the ones you use in **one folder**, side by side:
+
+```
+AI-Research\
+    AIPortable-JustAI\   this app
+    Research\            optional library
+    LibraryViewer\       optional tablet viewer
+```
+
+The apps find each other by that layout. The folder can be anywhere (another drive, a USB drive). Avoid
+OneDrive-synced folders.
+
+---
+
+## Setting up from scratch
+
+**You need:** Windows 10/11 64-bit or a 64-bit Linux desktop, and an internet connection for setup. Disk space:
+about 3 GB for the app and Ollama, plus the AI models you choose (0.3 - 20 GB each).
+
+1. **Get the folder.** Download this repository (green **Code** button → *Download ZIP*, then unzip), or with git:
+   `git clone https://github.com/DFranke84/AIPortable-JustAI`.
+2. **Run setup.**
+   - **Windows:** double-click `Setup-Windows.bat`. It asks which AI model to download (it detects your graphics
+     card's memory and shows the models that fit), then downloads everything else into this folder - no admin
+     rights, nothing installed on the rest of the PC.
+   - **Linux:** `bash scripts/setup-linux.sh` (asks for your password once, to install system libraries).
+3. **Start the app:** `AIPortable-JustAI.vbs` on Windows, `./start-aiportable-justai.sh` on Linux.
+
+Step by step, all options, manual install and troubleshooting: **[SETUP.md](SETUP.md)**.
+
+---
+
+## What you can do
+
+**In the chat**
+
+- **Chat** with the AI model you picked. Chats are saved and titled automatically; rename, delete, or export
+  one to a text file (↓). **Load model** gets the model ready before your first question.
+- **📁 Attach** a picture (for models that can see images), a PDF, Word or text file to one message.
+- **📚 Use your library**: the AI looks through your documents first and answers from them, showing which ones
+  it used.
+- **🗃️ Search archives**: the AI searches offline archives (Wikipedia, MedlinePlus, Stack Exchange…) before
+  answering. *Quick* does one search with any model; *Thorough* lets models that can use tools search and open
+  articles themselves. Sources open in a small article window.
+- **🎤 Voice input**: speak instead of typing (runs locally).
+
+**In the sidebar**
+
+- **📖 Reference Library**: your own documents. Add files in 🛠️ Tools/Settings → Library; read them here.
+- **🔍 Analyze Image**: identify what is in a photo, checked against your library.
+- **🌐 Translate**: typed text, or the text in a picture.
+- **🛠️ Tools/Settings**: models, library, phone access, system.
+- **🚪 Exit**: closes the app and frees the memory the AI models were using (or keeps them loaded, if you tick
+  that).
+
+**From your phone**: Tools/Settings → Mobile sync starts a small page your phone can open on the same Wi-Fi to
+chat with the app. Only use it on a home network you trust; it has no password.
+
+---
+
+## Your documents: two kinds of library
+
+- **The app's own Reference Library** - documents you add inside the app (Tools/Settings → Library). Good for a
+  handful of your own files.
+- **The Research library** - a separate, much larger library built with Library Manager (the Research download).
+  When a `Research` folder sits next to the app, the app offers to **Sync** it; or use Tools/Settings → Library →
+  **Sync Research Library** (and **Change folder…** if it is somewhere else). The app reads it where it is -
+  nothing is copied - and 📚 then answers from both. Sync again after adding things in Library Manager.
+
+Archives for 🗃️ (`.zim` files) are found in the Research library's `_sources\zim` folder automatically; add
+other folders in Tools/Settings → Library → *ZIM archive folders*. Free archives: https://library.kiwix.org.
+
+---
+
+## Choosing AI models
+
+Tools/Settings → Models lists models that fit your graphics card (pick your card's memory size: 4, 8, 12, 24 or
+32 GB) with a download button for each. Bigger models know more but need more memory and answer more slowly.
+The lists are plain files in `data/` (`4K-models-catalog.json` … `32K-models-catalog.json`) that you can edit;
+they include a **Survival** category chosen for practical, preparedness-style questions.
+
+Models are kept in `data/models`. On a slow USB drive you can move them to a folder on the PC (Tools/Settings →
+Models → *Choose folder on this PC*) and copy them back and forth with the Sync buttons.
+
+Ollama runs the models and is built in. If you prefer **LM Studio**, Tools/Settings → Models lets the app use
+LM Studio's local server for chat instead.
+
+---
+
+## Where things are kept
 
 ```
 AIPortable-JustAI/
@@ -54,24 +121,22 @@ AIPortable-JustAI/
 ├─ AIPortable-JustAI.vbs                      Windows launcher (no console)
 ├─ Start-AIPortable-JustAI-With-Console.bat   Windows launcher (with log console)
 ├─ start-aiportable-justai.sh                 Linux launcher
-├─ scripts/
-│  ├─ setup-windows.ps1                       Windows setup logic
-│  ├─ setup-linux.sh                          Linux setup logic
-│  └─ copy-vendor.js                          npm postinstall helper
-├─ src/main/                                  Electron main process + services
-├─ src/renderer/                              UI (HTML/CSS/JS)
-├─ data/                                      Model catalogs; runtime data is created here
-└─ resources/{ollama,whisper,kiwix}/{win,linux}/  Binaries go here
+├─ scripts/                                   setup logic (Windows, Linux)
+├─ src/main/                                  the app's main process and services
+├─ src/renderer/                              the app's window (HTML/CSS/JS)
+├─ data/                                      your chats, documents and models; the editable model lists
+└─ resources/{ollama,whisper,kiwix}/          Ollama, voice input and Kiwix (downloaded by setup)
 ```
 
-Created by setup or at runtime, and not shipped: `node_modules/`,
-`runtime/node/`, `src/renderer/vendor/`, `resources/*/*` binaries,
-`data/models/`, `data/chats.db`, `data/library.db`, `data/library/`.
+Created by setup or while you use the app (not part of the download): `node_modules/`, `runtime/node/`,
+`resources/*/*` programs, `data/models/`, `data/chats.db`, `data/library.db`, `data/library/`.
+
+A few per-PC choices (window size, graphics-card size, where models are kept on this PC, the Research folder) are
+remembered on each computer separately, so the same USB drive works on several PCs. Copy the whole folder to
+move or back up the app; SETUP.md section 10 explains how to reset or remove it.
 
 ## Security notes
 
-`contextIsolation` is on and `nodeIntegration` is off. The renderer can only
-reach the explicit API in `src/main/preload.js`, and a strict
-Content-Security-Policy is set in `index.html`. Ollama listens on
-`127.0.0.1` only. Mobile sync opens a LAN port only while you have it
-switched on.
+The app's window can only reach the explicit functions in `src/main/preload.js` (`contextIsolation` on,
+`nodeIntegration` off), and a strict Content-Security-Policy is set in `index.html`. Ollama and Kiwix listen on
+`127.0.0.1` only. Mobile sync opens a network port only while you have it switched on, and has no password.
