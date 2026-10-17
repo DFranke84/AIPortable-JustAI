@@ -84,6 +84,10 @@ contextBridge.exposeInMainWorld('localAI', {
   libraryContext: (query, embedModel) => ipcRenderer.invoke('library:context', { query, embedModel }),
   // -- ZIM search in chat (services/zimSearch.js) --
   zimListSearchable: () => ipcRenderer.invoke('zim:list-searchable'),
+  zimGetFolders: () => ipcRenderer.invoke('zim:get-folders'),
+  zimAddFolder: () => ipcRenderer.invoke('zim:add-folder'),
+  zimRemoveFolder: (folderPath) => ipcRenderer.invoke('zim:remove-folder', folderPath),
+  zimSetFolderEnabled: (payload) => ipcRenderer.invoke('zim:set-folder-enabled', payload),
   loadChatModel: (payload) => ipcRenderer.invoke('chat:load-model', payload),
   zimSaveSettings: (payload) => ipcRenderer.invoke('zim:save-settings', payload),
   zimContext: (payload) => ipcRenderer.invoke('zim:context', payload),

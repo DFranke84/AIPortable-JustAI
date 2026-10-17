@@ -26,9 +26,10 @@ folder that you can move or carry on a USB drive.
   `nomic-embed-text`. **📖 Reference Library** browses everything you've
   added.
 - **ZIM archives (🗃️):** tick .zim archives (Wikipedia, MedlinePlus,
-  StackExchange…) from the Research library's `_sources/zim` folder and the
-  AI searches them before answering, using each archive's own search index
-  through a bundled `kiwix-serve` (127.0.0.1 only). **Quick** = one search,
+  StackExchange…) and the AI searches them before answering, using each archive's own search index
+  through a bundled `kiwix-serve` (127.0.0.1 only). Folders are set in
+  Tools → Library → ZIM archive folders: the Research library's `_sources/zim`
+  plus any you add. **Quick** = one search,
   any model; **Thorough** = tool-calling models search and open articles
   themselves. Sources open in a small article window. Saved per chat.
 - **Load model** button: load the selected model before the first question;

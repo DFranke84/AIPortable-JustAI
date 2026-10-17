@@ -532,6 +532,17 @@ function createWindow() {
   });
   if (hostSettings.windowMaximized) win.maximize();
   win.once('ready-to-show', () => win.show());
+  // Rarely Chromium's network service crashes during start-up (seen right
+  // after another Electron app quit, 2026-10-17) and the first page load
+  // stalls blank — and this window, hidden until ready-to-show, never
+  // appears, so the app looks like it didn't start. One reload after 15 s
+  // recovers it; if even that doesn't paint, show the window anyway.
+  const startupWatchdog = setTimeout(() => {
+    if (!win || win.isDestroyed() || win.isVisible()) return;
+    win.webContents.reload();
+    setTimeout(() => { if (win && !win.isDestroyed() && !win.isVisible()) win.show(); }, 10000);
+  }, 15000);
+  win.once('ready-to-show', () => clearTimeout(startupWatchdog));
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
   win.on('close', (e) => {
     // Once shuttingDown is set, before-quit's second app.quit() pass is
@@ -1051,14 +1062,80 @@ ipcMain.handle('library:reset', async (e, { scope } = {}) => {
 // ---------------------------------------------------------------------------
 // IPC — ZIM search for chat (services/zimSearch.js)
 //
-// Every .zim in the Research library's _sources\zim folder is searchable.
-// The ticked set and Quick/Thorough mode are remembered per chat only
-// (chats.zim_settings) — the app and new chats start with none.
+// Which folders are searched is the "ZIM archive folders" setting (Tools →
+// Library): the Research library's _sources\zim (automatic, can be switched
+// off) plus any folders the user adds. Per machine (hostSettings.zimFolders),
+// since drive letters are. The ticked archives and Quick/Thorough mode are
+// remembered per chat only (chats.zim_settings) — new chats start with none.
 // ---------------------------------------------------------------------------
-function zimSearchFolders() {
-  const research = getResearchRoot();
-  return research ? [path.join(research, '_sources', 'zim')] : [];
+function zimFolderSettings() {
+  const s = hostSettings.zimFolders || {};
+  return { extra: Array.isArray(s.extra) ? s.extra : [], disabled: Array.isArray(s.disabled) ? s.disabled : [] };
 }
+
+function countZims(dir) {
+  return ZimSearch.scanFolders([dir]).length;
+}
+
+// [{ key, label, path, auto, enabled, exists, count }] for the Tools list.
+function zimFolderList() {
+  const { extra, disabled } = zimFolderSettings();
+  const research = getResearchRoot();
+  const auto = [
+    { key: 'research', label: 'Research library', path: research ? path.join(research, '_sources', 'zim') : null },
+  ];
+  return [
+    ...auto.map((f) => ({ ...f, auto: true, enabled: !disabled.includes(f.key) })),
+    ...extra.map((p) => ({ key: p, label: null, path: p, auto: false, enabled: true })),
+  ].map((f) => {
+    const exists = !!f.path && fs.existsSync(f.path);
+    return { ...f, exists, count: exists ? countZims(f.path) : 0 };
+  });
+}
+
+function zimSearchFolders() {
+  return zimFolderList().filter((f) => f.enabled && f.exists).map((f) => f.path);
+}
+
+function saveZimFolderSettings(settings) {
+  hostSettings.zimFolders = settings;
+  saveHostSettings();
+}
+
+ipcMain.handle('zim:get-folders', () => zimFolderList());
+
+ipcMain.handle('zim:add-folder', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+    title: 'Choose a folder with .zim archives to search from chat',
+    properties: ['openDirectory'],
+  });
+  if (canceled || !filePaths[0]) return { ok: false, canceled: true, folders: zimFolderList() };
+  const chosen = path.resolve(filePaths[0]);
+  const same = (a, b) => a && b && path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase();
+  if (zimFolderList().some((f) => same(f.path, chosen))) {
+    return { ok: false, error: 'That folder is already in the list.', folders: zimFolderList() };
+  }
+  if (!countZims(chosen)) return { ok: false, error: 'That folder has no .zim files in it (sub-folders aren\'t searched).', folders: zimFolderList() };
+  const s = zimFolderSettings();
+  saveZimFolderSettings({ ...s, extra: [...s.extra, chosen] });
+  return { ok: true, folders: zimFolderList() };
+});
+
+ipcMain.handle('zim:remove-folder', (e, folderPath) => {
+  const s = zimFolderSettings();
+  saveZimFolderSettings({ ...s, extra: s.extra.filter((p) => p !== folderPath) });
+  return zimFolderList();
+});
+
+// Switch one of the automatic folders on or off.
+ipcMain.handle('zim:set-folder-enabled', (e, { key, enabled }) => {
+  const s = zimFolderSettings();
+  const disabled = s.disabled.filter((k) => k !== key);
+  if (!enabled) disabled.push(key);
+  saveZimFolderSettings({ ...s, disabled });
+  return zimFolderList();
+});
+
 
 async function ensureZimSearch() {
   return zimSearch.ensureRunning(ZimSearch.scanFolders(zimSearchFolders()), findBundledKiwix());
@@ -1068,7 +1145,10 @@ ipcMain.handle('zim:list-searchable', async () => {
   const ok = await ensureZimSearch();
   const books = ok ? await zimSearch.listBooks() : [];
   return {
-    books: books.map(({ id, title, ftindex, articles }) => ({ id, title, ftindex, articles })).sort((a, b) => a.title.localeCompare(b.title)),
+    // date and folder tell apart two versions of the same archive (e.g. Wikipedia 2026-04 and 2026-08).
+    books: books
+      .map(({ id, title, ftindex, articles, file }) => ({ id, title, ftindex, articles, date: /_(\d{4}-\d{2})[a-z]?$/.exec(id)?.[1] || null, folder: file ? path.dirname(file) : null }))
+      .sort((a, b) => a.title.localeCompare(b.title) || (b.date || '').localeCompare(a.date || '')),
   };
 });
 
