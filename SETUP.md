@@ -60,8 +60,9 @@ distro packages and set the Electron sandbox permission.
 
 ### Step 2.1 — Put the folder where it will live
 
-Copy `AIPortable-JustAI` to its permanent location, for example
-`E:\AIPortable-JustAI` or a USB drive. Avoid OneDrive-synced folders, which
+Copy `AIPortable-JustAI` to its permanent location: a folder on any drive, or
+a USB drive. If you also use the Research library, put both in one parent
+folder, side by side (see the README). Avoid OneDrive-synced folders, which
 lock files during `npm` installs.
 
 ### Step 2.2 — Run the setup script
@@ -215,6 +216,10 @@ Other things to know:
   `.doc` files into a category you create. Then turn on the 📚 button in
   the chat composer to have matching passages fed to the model.
   **📖 Reference Library** in the sidebar browses everything you've added.
+- **Research library** (optional, the separate Research download): when its
+  folder sits next to this one, the app offers **Sync now**. Or use
+  Tools → Library → **Sync Research Library** (**Change folder…** if it is
+  elsewhere). It is read in place and 📚 then answers from it too.
 - **Analyze Image / Translate** (sidebar): these need a *vision* model for
   images, such as `moondream` or a `qwen2.5vl` model from the Vision
   category.
