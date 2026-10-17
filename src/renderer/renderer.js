@@ -1,4 +1,4 @@
-const state = { chatId: null, model: null, streaming: false, aborting: false, ragEnabled: false, pendingAttachments: [], contextSize: null, keepModelsLoadedOnExit: false, backend: 'ollama', lmstudioAutoLoad: true };
+const state = { chatId: null, model: null, streaming: false, aborting: false, ragEnabled: false, zimBooks: [], zimMode: 'quick', pendingAttachments: [], contextSize: null, keepModelsLoadedOnExit: false, backend: 'ollama', lmstudioAutoLoad: true };
 
 // Library search always embeds with this model, regardless of whatever chat
 // model is currently selected — every stored doc/chunk embedding is built
@@ -15,6 +15,7 @@ const els = {
   statusText: document.getElementById('status-text'),
   modelLoadDot: document.getElementById('model-load-dot'),
   modelLoadText: document.getElementById('model-load-text'),
+  modelLoadBtn: document.getElementById('model-load-btn'),
   composer: document.getElementById('composer'),
   input: document.getElementById('input'),
   send: document.getElementById('send'),
@@ -23,6 +24,16 @@ const els = {
   exportChat: document.getElementById('export-chat'),
   micBtn: document.getElementById('mic-btn'),
   ragToggle: document.getElementById('rag-toggle'),
+  zimToggle: document.getElementById('zim-toggle'),
+  zimPicker: document.getElementById('zim-picker'),
+  zimPickerList: document.getElementById('zim-picker-list'),
+  zimPickerNote: document.getElementById('zim-picker-note'),
+  zimPickerNone: document.getElementById('zim-picker-none'),
+  zimPickerDone: document.getElementById('zim-picker-done'),
+  zimSummary: document.getElementById('zim-summary'),
+  zimSummaryText: document.getElementById('zim-summary-text'),
+  zimSummaryChange: document.getElementById('zim-summary-change'),
+  zimSummaryClear: document.getElementById('zim-summary-clear'),
   themeToggle: document.getElementById('theme-toggle'),
   attachBtn: document.getElementById('attach-btn'),
   attachFile: document.getElementById('attach-file'),
@@ -93,6 +104,7 @@ const els = {
   catalogList: document.getElementById('catalog-list'),
   catalogTiersList: document.getElementById('catalog-tiers-list'),
   contextSizeList: document.getElementById('context-size-list'),
+  contextSizeNote: document.getElementById('context-size-note'),
   backendList: document.getElementById('backend-list'),
   backendLmstudioOptions: document.getElementById('backend-lmstudio-options'),
   backendLmstudioStatus: document.getElementById('backend-lmstudio-status'),
@@ -245,6 +257,45 @@ els.themeToggle.onclick = () => {
 };
 
 // ============================================================ chat core
+// Model replies shown as formatted text (bold, lists, headings, code) rather
+// than raw **markdown**. A separate Marked instance, so the Reference
+// Library's own rendering is untouched. Model output is untrusted: raw HTML
+// is shown as text, links don't navigate (clicking one would take the whole
+// app window off to that page), and images aren't fetched.
+function escapeReplyHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+const replyMarked = window.marked?.Marked
+  ? new window.marked.Marked({
+    gfm: true,
+    breaks: true, // a single newline stays a line break, as in the plain-text display
+    renderer: {
+      // <br> is the one tag models routinely use (line breaks inside table cells) — harmless, so kept.
+      html: (html) => (/^\s*<br\s*\/?>\s*$/i.test(html) ? '<br>' : escapeReplyHtml(html)),
+      link: (href, title, text) => `<span class="md-link" title="${escapeReplyHtml(href)}">${text}</span>`,
+      image: (href, title, text) => (text ? escapeReplyHtml(`[image: ${text}]`) : ''),
+    },
+  })
+  : null;
+
+function renderReply(el, text) {
+  if (!replyMarked) { el.textContent = text; return; }
+  el.classList.add('md');
+  el.innerHTML = replyMarked.parse(text || '');
+}
+
+// Streaming re-renders the whole reply on each token — batched to one render
+// per animation frame so a fast model doesn't re-parse hundreds of times a second.
+function replyRenderer(el, onRendered) {
+  let pending = null;
+  return (text) => {
+    if (pending === null) {
+      requestAnimationFrame(() => { renderReply(el, pending); pending = null; onRendered?.(); });
+    }
+    pending = text;
+  };
+}
+
 function addMessageEl(role, content, attachments) {
   const div = document.createElement('div');
   div.className = `msg ${role}`;
@@ -260,8 +311,9 @@ function addMessageEl(role, content, attachments) {
     for (const a of attachments) row.appendChild(renderAttachmentChip(a, { large: true }));
     div.appendChild(row);
   }
-  const body = document.createElement('span');
-  body.textContent = content;
+  const body = document.createElement('div');
+  if (role === 'assistant') renderReply(body, content);
+  else body.textContent = content;
   div.appendChild(body);
   els.messages.appendChild(div);
   els.messages.scrollTop = els.messages.scrollHeight;
@@ -447,6 +499,7 @@ async function refreshChatList() {
 
 async function openChat(chatId) {
   state.chatId = chatId;
+  applyChatZimSettings(chatId);
   const history = await window.localAI.getHistory(chatId);
   els.messages.innerHTML = '';
   els.scrollTopBtn.classList.add('hidden');
@@ -598,13 +651,71 @@ els.composer.addEventListener('submit', async (e) => {
   // safety net for a zero-token completion or error.
   assistantBody.classList.add('pending');
   const hasDocAttachment = attachments.some((a) => a.kind === 'text');
-  const pendingLabel = images.length ? 'Processing image' : hasDocAttachment ? 'Processing document' : 'Waiting for model';
+  let pendingLabel = images.length ? 'Processing image' : hasDocAttachment ? 'Processing document' : 'Waiting for model';
   assistantBody.innerHTML = `<span class="typing-dots"><span></span><span></span><span></span></span><span class="pending-timer">${pendingLabel}…</span>`;
   const pendingTimerEl = assistantBody.querySelector('.pending-timer');
-  const pendingStart = Date.now();
+  let pendingStart = Date.now();
+  const phase = (label) => { pendingLabel = label; pendingStart = Date.now(); pendingTimerEl.textContent = `${label}…`; };
+  currentPendingPhase = phase;
   const pendingInterval = setInterval(() => {
     pendingTimerEl.textContent = `${pendingLabel}… ${Math.floor((Date.now() - pendingStart) / 1000)}s`;
   }, 1000);
+  let full = '';
+  let firstToken = true;
+  state.streaming = true;
+  state.aborting = false;
+  setSendButtonMode('stop');
+
+  // ZIM archives: searched after the reply bubble exists so the search steps
+  // ("Searching: …", "Reading: …") can show live in it, and after the Stop
+  // button is live so a slow Thorough search can be cancelled.
+  const zimQuestion = text || identifiedAs;
+  if (state.zimBooks.length && zimQuestion) {
+    // Same num_ctx as the reply below (ZIM text always triggers the 16K
+    // bump), so the model isn't reloaded between research and answer.
+    const zimOptions = { num_ctx: await fitResidentCtx(chatNumCtx()) };
+    // Load the model as its own visible step — otherwise its load time hides
+    // inside "Searching" (the keyword step is the model's first use). A
+    // no-op when it's already loaded with this context size.
+    if ((await modelResidency()) !== 'loaded') {
+      phase('Loading model');
+      setModelLoadState('loading');
+    }
+    await window.localAI.loadChatModel({ model: state.model, options: zimOptions, zim: true });
+    setModelLoadState('loaded');
+    phase('Searching ZIM archives');
+    const stopSteps = window.localAI.onZimStep((step) => phase(step));
+    const prior = await window.localAI.getHistory(state.chatId);
+    const previous = [...prior].reverse().find((m) => m.role === 'user')?.content?.slice(0, 300) || null;
+    saveZimSettings();
+    let zim = { text: '', sources: [], steps: [] };
+    try {
+      zim = await window.localAI.zimContext({ model: state.model, question: zimQuestion, previous, books: state.zimBooks, mode: state.zimMode, options: zimOptions });
+    } catch (err) {
+      zim.steps = [`ZIM search failed: ${ipcErrorText(err)}`];
+    }
+    stopSteps();
+    phase('Thinking');
+    if (state.aborting) {
+      clearInterval(pendingInterval);
+      assistantBody.parentElement.remove();
+      state.streaming = false;
+      state.aborting = false;
+      setSendButtonMode('send');
+      return;
+    }
+    if (zim.text) {
+      contextResult = {
+        text: [contextResult.text, zim.text].filter(Boolean).join('\n\n---\n\n'),
+        sources: [...contextResult.sources, ...zim.sources],
+      };
+    }
+    const stepsTag = document.createElement('div');
+    stepsTag.className = 'sources-tag';
+    stepsTag.textContent = `🗃️ ${zim.fellBack ? 'Thorough needs a tool-calling model — used Quick. ' : ''}${zim.steps.join(' → ') || 'Searched'}${zim.sources.length ? '' : ' — nothing found'}`;
+    assistantBody.parentElement.insertBefore(stepsTag, assistantBody);
+  }
+
   if (contextResult.sources.length) {
     const tag = document.createElement('div');
     tag.className = 'sources-tag';
@@ -616,13 +727,16 @@ els.composer.addEventListener('submit', async (e) => {
     });
     assistantBody.parentElement.insertBefore(tag, assistantBody);
   }
-  let full = '';
-  let firstToken = true;
-  state.streaming = true;
-  state.aborting = false;
-  setSendButtonMode('stop');
-  setModelLoadState('loading');
+  // Only claim "Loading model" when it really isn't resident (with the
+  // context size this request uses) — a loaded model is just thinking.
+  if ((await modelResidency()) === 'loaded') {
+    setModelLoadState('loaded');
+    if (pendingLabel === 'Waiting for model') { pendingLabel = 'Thinking'; pendingTimerEl.textContent = 'Thinking…'; }
+  } else {
+    setModelLoadState('loading');
+  }
 
+  const showReply = replyRenderer(assistantBody, () => { els.messages.scrollTop = els.messages.scrollHeight; });
   const unsubscribe = window.localAI.onChatToken((data) => {
     if (data.streamId !== streamId) return;
     const token = data.message?.content;
@@ -635,8 +749,7 @@ els.composer.addEventListener('submit', async (e) => {
         setModelLoadState('loaded'); // it streamed a token, so it must be resident now
       }
       full += token;
-      assistantBody.textContent = full;
-      els.messages.scrollTop = els.messages.scrollHeight;
+      showReply(full);
     }
   });
 
@@ -669,8 +782,8 @@ els.composer.addEventListener('submit', async (e) => {
   // floor — attachments can still raise it further above that floor, never
   // below it, so a deliberately small setting on a tiny GPU doesn't quietly
   // get ignored, but also doesn't starve a request that genuinely needs more.
-  const needsContextBump = images.length || docAttachments.length || Boolean(contextResult.text);
-  const effectiveCtx = needsContextBump ? Math.max(state.contextSize || 0, 16384) : state.contextSize;
+  const needsContextBump = images.length || docAttachments.length || Boolean(contextResult.text) || state.ragEnabled || state.zimBooks.length > 0;
+  const effectiveCtx = await fitResidentCtx(needsContextBump ? Math.max(state.contextSize || 0, 16384) : state.contextSize);
   const options = effectiveCtx ? { num_ctx: effectiveCtx } : undefined;
 
   // History budget: whatever the request will actually use for context
@@ -695,7 +808,7 @@ els.composer.addEventListener('submit', async (e) => {
     messages = [
       {
         role: 'system',
-        content: `Use the following context from the user's local library if it's relevant to their question. Mention which source(s) you drew from if you use them.\n\n${contextResult.text}`,
+        content: `Use the following context from the user's local library and offline reference archives if it's relevant to their question. Mention which source(s) you drew from if you use them.\n\n${contextResult.text}`,
       },
       ...messages,
     ];
@@ -748,6 +861,7 @@ els.composer.addEventListener('submit', async (e) => {
     assistantBody.parentElement.appendChild(tag);
   }
 
+  currentPendingPhase = null;
   if (full) await window.localAI.saveAssistantMessage(state.chatId, full);
 
   unsubscribe();
@@ -787,7 +901,128 @@ els.ragToggle.addEventListener('click', () => {
   state.ragEnabled = !state.ragEnabled;
   els.ragToggle.classList.toggle('active', state.ragEnabled);
   els.ragToggle.title = state.ragEnabled ? 'Library context: ON — click to disable' : 'Use library context (RAG)';
+  refreshModelLoadState(); // changes the context size the model needs (see chatNumCtx)
 });
+
+// ---- ZIM archive search in chat (main.js zim:* / services/zimSearch.js) ----
+// The 🗃️ button opens a checklist of every searchable .zim plus the
+// Quick/Thorough choice. Nothing is ticked when the app starts or in a new
+// chat; a chat that used archives gets its own choice back when reopened
+// (saved in chats.zim_settings). Whenever archives are ticked, the choice
+// stays on screen — as the full list while open, or a one-line summary.
+let zimBookList = null; // [{ id, title, ftindex, articles }] once loaded
+let zimPickerOpen = false;
+let zimTitles = {}; // id -> title, so the summary can name archives without starting the search server
+
+function updateZimToggle() {
+  const on = state.zimBooks.length > 0;
+  els.zimToggle.classList.toggle('active', on);
+  els.zimToggle.title = zimPickerOpen ? 'Close the archive list' : 'Search ZIM archives (Wikipedia, MedlinePlus…) when answering';
+  els.zimPicker.classList.toggle('hidden', !zimPickerOpen);
+  els.zimSummary.classList.toggle('hidden', zimPickerOpen || !on);
+  if (on) {
+    const names = state.zimBooks.map((id) => zimTitles[id] || readableZimId(id));
+    els.zimSummaryText.textContent = `🗃️ Searching (${state.zimMode === 'thorough' ? 'Thorough' : 'Quick'}): ${names.join(', ')}`;
+  }
+  refreshModelLoadState(); // ticking archives changes the context size the model needs
+}
+
+// "wikipedia_en_all_maxi_2026-08" -> "Wikipedia" — for chats saved before
+// archive titles were stored with them, until the real list is loaded.
+function readableZimId(id) {
+  const s = id.replace(/_\d{4}-\d{2}[a-z]?$/, '').replace(/_(en|all|maxi|nopic|mini)(?=_|$)/g, '').replace(/_/g, ' ').trim();
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+async function loadZimBooks() {
+  if (zimBookList) return zimBookList;
+  els.zimPickerList.textContent = 'Starting the archive search…';
+  const { books } = await window.localAI.zimListSearchable();
+  zimBookList = books;
+  for (const b of books) zimTitles[b.id] = b.title;
+  // Ticks for archives that no longer exist (deleted, drive not plugged in) are dropped.
+  state.zimBooks = state.zimBooks.filter((id) => books.some((b) => b.id === id));
+  return books;
+}
+
+function renderZimPicker() {
+  els.zimPickerList.innerHTML = '';
+  if (!zimBookList.length) {
+    els.zimPickerList.textContent = 'No .zim files found — add them to the Research library\'s _sources\\zim folder (Tools → Library connects the Research library).';
+    return;
+  }
+  for (const b of zimBookList) {
+    const label = document.createElement('label');
+    label.title = b.ftindex ? b.id : `${b.id} — no full-text index, so only article titles are searched`;
+    const box = document.createElement('input');
+    box.type = 'checkbox';
+    box.checked = state.zimBooks.includes(b.id);
+    box.onchange = () => {
+      state.zimBooks = box.checked ? [...state.zimBooks, b.id] : state.zimBooks.filter((id) => id !== b.id);
+      updateZimToggle();
+    };
+    const name = document.createElement('span');
+    name.className = 'zim-name';
+    name.textContent = b.title;
+    const meta = document.createElement('span');
+    meta.className = 'zim-meta';
+    const count = b.articles >= 1e6 ? `${(b.articles / 1e6).toFixed(1)}M` : b.articles >= 1e3 ? `${Math.round(b.articles / 1e3)}K` : String(b.articles);
+    meta.textContent = b.ftindex ? count : `${count} · titles only`;
+    label.append(box, name, meta);
+    els.zimPickerList.appendChild(label);
+  }
+  els.zimPicker.querySelector(`input[name="zim-mode"][value="${state.zimMode}"]`).checked = true;
+  els.zimPickerNote.textContent = 'Pick only the archives that fit the topic — fewer gives faster, more on-topic answers.';
+}
+
+function saveZimSettings() {
+  const titles = Object.fromEntries(state.zimBooks.map((id) => [id, zimTitles[id] || id]));
+  window.localAI.zimSaveSettings({ chatId: state.chatId, books: state.zimBooks, mode: state.zimMode, titles });
+}
+
+async function openZimPicker() {
+  zimPickerOpen = true;
+  updateZimToggle();
+  await loadZimBooks();
+  renderZimPicker();
+  updateZimToggle();
+}
+
+function closeZimPicker() {
+  zimPickerOpen = false;
+  updateZimToggle();
+  saveZimSettings();
+}
+
+els.zimToggle.addEventListener('click', () => (zimPickerOpen ? closeZimPicker() : openZimPicker()));
+els.zimPicker.querySelectorAll('input[name="zim-mode"]').forEach((r) => {
+  r.addEventListener('change', () => { if (r.checked) { state.zimMode = r.value; updateZimToggle(); } });
+});
+els.zimPickerNone.onclick = () => {
+  state.zimBooks = [];
+  renderZimPicker();
+  updateZimToggle();
+};
+els.zimPickerDone.onclick = closeZimPicker;
+els.zimSummaryChange.onclick = openZimPicker;
+els.zimSummaryClear.onclick = () => {
+  state.zimBooks = [];
+  updateZimToggle();
+  saveZimSettings();
+};
+
+// Back to nothing ticked (new chat), or the chat's own saved choice.
+// Read from the chat list (SELECT * includes zim_settings).
+async function applyChatZimSettings(chatId) {
+  const chats = await window.localAI.listChats();
+  let saved = null;
+  try { saved = JSON.parse(chats.find((c) => c.id === chatId)?.zim_settings || 'null'); } catch { /* ignore */ }
+  state.zimBooks = [...(saved?.books || [])];
+  state.zimMode = saved?.mode === 'thorough' ? 'thorough' : 'quick';
+  Object.assign(zimTitles, saved?.titles || {});
+  if (zimPickerOpen && zimBookList) renderZimPicker();
+  updateZimToggle();
+}
 
 els.modelSelect.addEventListener('change', () => {
   state.model = els.modelSelect.value;
@@ -828,10 +1063,11 @@ function ipcErrorText(err) {
 // restart the timer or re-flash "Model loaded" every time it re-confirms a
 // mode that hasn't actually changed.
 let modelLoadUiMode = 'idle';
+let modelLoadUiLabel = 'Loading model';
 let modelLoadTimerInterval = null;
 let modelLoadTextClearTimeout = null;
 
-function setModelLoadState(mode) {
+function setModelLoadState(mode, label = 'Loading model') {
   els.modelLoadDot.classList.toggle('loaded', mode === 'loaded');
   els.modelLoadDot.classList.toggle('loading', mode === 'loading');
   els.modelLoadDot.title =
@@ -839,8 +1075,10 @@ function setModelLoadState(mode) {
     : mode === 'loaded' ? 'Model loaded in memory'
     : 'Not loaded in memory yet — first message will take longer';
 
-  if (mode === modelLoadUiMode) return;
+  els.modelLoadBtn.classList.toggle('hidden', mode !== 'idle' || !state.model);
+  if (mode === modelLoadUiMode && (mode !== 'loading' || label === modelLoadUiLabel)) return;
   modelLoadUiMode = mode;
+  modelLoadUiLabel = label;
   clearInterval(modelLoadTimerInterval);
   modelLoadTimerInterval = null;
   clearTimeout(modelLoadTextClearTimeout);
@@ -848,10 +1086,10 @@ function setModelLoadState(mode) {
 
   if (mode === 'loading') {
     const start = Date.now();
-    els.modelLoadText.textContent = 'Loading model… 0s';
+    els.modelLoadText.textContent = `${label}… 0s`;
     els.modelLoadText.classList.remove('hidden');
     modelLoadTimerInterval = setInterval(() => {
-      els.modelLoadText.textContent = `Loading model… ${Math.floor((Date.now() - start) / 1000)}s`;
+      els.modelLoadText.textContent = `${label}… ${Math.floor((Date.now() - start) / 1000)}s`;
     }, 1000);
   } else if (mode === 'loaded') {
     els.modelLoadText.textContent = 'Model loaded';
@@ -862,16 +1100,89 @@ function setModelLoadState(mode) {
   }
 }
 
-async function refreshModelLoadState() {
-  if (!state.model || state.streaming) return; // don't fight the 'loading' state set during a send
+// Ollama reloads a model whenever a request's num_ctx differs from the one
+// it was loaded with — even a smaller one. If the selected model is already
+// resident with at least `needed`, ask for exactly that size instead.
+async function fitResidentCtx(needed) {
+  if (state.backend !== 'ollama') return needed;
+  try {
+    const m = (await window.localAI.getRunningModels()).find((r) => r.name === state.model);
+    if (m?.context_length && m.context_length >= (needed || 0)) return m.context_length;
+  } catch { /* fall through */ }
+  return needed;
+}
+
+// 'loaded' = resident and ready for the next request; 'resize' = resident
+// but Ollama would reload it because the request needs a different context
+// size (e.g. it was loaded before ZIM archives were ticked); 'idle' = not
+// resident. LM Studio never reloads for this, so it's never 'resize' there.
+async function modelResidency() {
   try {
     const running = await window.localAI.getRunningModels();
-    setModelLoadState(running.some((m) => m.name === state.model) ? 'loaded' : 'idle');
+    const m = running.find((r) => r.name === state.model);
+    if (!m) return 'idle';
+    const want = chatNumCtx();
+    if (state.backend === 'ollama' && want && m.context_length && m.context_length < want) return 'resize';
+    return 'loaded';
   } catch {
-    setModelLoadState('idle');
+    return 'idle';
   }
 }
+
+async function refreshModelLoadState() {
+  if (!state.model || state.streaming || modelLoadingByButton) return; // don't fight a 'loading' state already in progress
+  const r = await modelResidency();
+  els.modelLoadBtn.textContent = r === 'resize' ? 'Reload model' : 'Load model';
+  els.modelLoadBtn.title = r === 'resize'
+    ? 'The model is loaded with a smaller context than ZIM/library search needs — the next question would reload it anyway. Reload it now.'
+    : 'Load the selected model into memory now, so your first question is answered faster';
+  setModelLoadState(r === 'loaded' ? 'loaded' : 'idle');
+}
 setInterval(refreshModelLoadState, 5000);
+
+// The reply bubble currently waiting for its first token, if any — lets the
+// reload notice below show up there as well as in the header.
+let currentPendingPhase = null;
+
+// Ollama is reloading the model because a request needs a bigger context
+// than it's loaded with (ZIM/library/image after plain chat on a smaller
+// size, or a bigger size picked in Tools → Models). Smaller or unspecified
+// sizes never reload — see fitOptions in ollama.js.
+const ctxLabel = (n) => (n >= 1024 ? `${Math.round(n / 1024)}K` : String(n));
+window.localAI.onModelReload(({ from, to }) => {
+  const text = `Reloading model for a larger context (${ctxLabel(from)} → ${ctxLabel(to)})`;
+  setModelLoadState('loading', text);
+  currentPendingPhase?.(text);
+});
+
+// The context size a chat request will use — with library or ZIM lookups
+// on it's always the 16K bump (see needsContextBump in the send handler),
+// so loading ahead with the same size means no reload on the first question.
+function chatNumCtx() {
+  const bump = state.ragEnabled || state.zimBooks.length > 0;
+  return bump ? Math.max(state.contextSize || 0, 16384) : state.contextSize;
+}
+
+// "Load model": loads the selected model before the first question (and
+// starts the ZIM search server if archives are ticked). Optional — sending
+// a message still loads it the same as always.
+let modelLoadingByButton = false;
+els.modelLoadBtn.onclick = async () => {
+  if (!state.model || modelLoadingByButton) return;
+  modelLoadingByButton = true;
+  setModelLoadState('loading');
+  // Always room for ZIM/library lookups (16K), so ticking them after loading
+  // doesn't force a reload; plain chats then reuse it too (fitResidentCtx).
+  const numCtx = Math.max(state.contextSize || 0, 16384);
+  const res = await window.localAI.loadChatModel({ model: state.model, options: numCtx ? { num_ctx: numCtx } : undefined, zim: state.zimBooks.length > 0 });
+  modelLoadingByButton = false;
+  if (!res.success) {
+    setModelLoadState('idle');
+    await showAppAlert(`Couldn't load the model: ${res.error}`);
+    return;
+  }
+  refreshModelLoadState();
+};
 
 // ============================================================ tools panel
 function showTab(name) {
@@ -972,9 +1283,14 @@ async function refreshContextSizeControl() {
     btn.textContent = opt.label;
     btn.title = opt.value === null ? "Let Ollama size the context automatically" : `Use at least ${opt.value.toLocaleString()} tokens of context for every message`;
     btn.onclick = async () => {
-      state.contextSize = await window.localAI.setContextSize(opt.value);
+      const res = await window.localAI.setContextSize(opt.value);
+      state.contextSize = res.size;
       [...els.contextSizeList.children].forEach((c) => c.classList.remove('active'));
       btn.classList.add('active');
+      els.contextSizeNote.textContent = res.unloaded
+        ? `${res.unloaded} was unloaded so the new size takes effect — it loads again with your next message (or click Load model).`
+        : '';
+      refreshModelLoadState();
     };
     els.contextSizeList.appendChild(btn);
   }
@@ -1153,9 +1469,22 @@ window.localAI.onPullComplete(() => { refreshCatalog(); refreshModels(); });
 
 // One cited document under a reply (or in a search result): a Local/Research
 // badge plus the title, clickable to open it in the Reference Library.
-function sourceLink({ id, title, kind }) {
+function sourceLink({ id, title, kind, bookTitle, file, url }) {
   const a = document.createElement('span');
   a.className = 'src-link';
+  if (kind === 'zim') {
+    // A ZIM article: opens in its own small window (JustAI has no Wikipedia viewer).
+    a.title = `From the ${bookTitle} archive — click to read it`;
+    const badge = document.createElement('span');
+    badge.className = 'src-badge zim';
+    badge.textContent = bookTitle || 'ZIM';
+    a.append(badge, title);
+    a.onclick = async () => {
+      const res = await window.localAI.zimOpenArticle({ url, title });
+      if (!res?.success) await showAppAlert(`Couldn't open "${title}" — its .zim file may have moved.`);
+    };
+    return a;
+  }
   a.title = kind === 'research' ? 'Linked from your Research library — click to read it' : 'One of your own uploads — click to read it';
   const badge = document.createElement('span');
   badge.className = `src-badge ${kind === 'research' ? 'research' : 'local'}`;
@@ -1736,13 +2065,14 @@ async function runAnalysis() {
     const streamId = `analyze_${Date.now()}`;
     let full = '';
     let firstToken = true;
+    const showAnalysis = replyRenderer(els.analyzeAnswer);
     unsubscribe = window.localAI.onChatToken((data) => {
       if (data.streamId !== streamId) return;
       const token = data.message?.content;
       if (token) {
         if (firstToken) { firstToken = false; analyzeState.stageStart = null; els.analyzeAnswer.textContent = ''; }
         full += token;
-        els.analyzeAnswer.textContent = full;
+        showAnalysis(full);
       }
     });
     // Same context-size floor chat uses whenever an image or library context

@@ -1,0 +1,4 @@
+Portable kiwix-serve for Windows goes in this folder (kiwix-serve.exe plus its .dll files).
+
+Get it from https://download.kiwix.org/release/kiwix-tools/ (kiwix-tools_win-x86_64-*.zip)
+and unpack the contents here. Used by the chat's ZIM archive search (the 🗃️ button).

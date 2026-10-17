@@ -136,6 +136,9 @@ function initDb(dbPath, libraryDbPath) {
   // drive-letter change; ext_mtime is that .md's mtime at last sync, the
   // cheap first check for "has this file changed?" (see researchSync.js).
   ensureColumn(db, 'lib.library_docs', 'library_docs', 'ext_path', 'TEXT');
+  // Which .zim archives a chat searches and how (Quick/Thorough), as JSON —
+  // see zim:save-settings in main.js. NULL = never set; uses the last-used choice.
+  ensureColumn(db, 'chats', 'chats', 'zim_settings', 'TEXT');
   ensureColumn(db, 'lib.library_docs', 'library_docs', 'ext_original', 'TEXT');
   ensureColumn(db, 'lib.library_docs', 'library_docs', 'ext_mtime', 'INTEGER');
 
