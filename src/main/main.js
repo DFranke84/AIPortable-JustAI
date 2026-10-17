@@ -300,6 +300,30 @@ function appendOllamaLog(chunk) {
   }
 }
 
+// Ollama's model runners (llama-server.exe) can outlive an Ollama that
+// crashed or was killed, each still holding a model in RAM/VRAM (three such
+// orphans were found on 2026-10-17). Before starting our own Ollama, stop
+// runners that belong to this app's copy of Ollama and whose parent process
+// no longer exists. A reused parent PID only means one is left alone.
+function killOrphanRunners() {
+  if (process.platform !== 'win32') return Promise.resolve();
+  const ours = path.join(getResourcesDir(), 'ollama').toLowerCase();
+  const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (err) { return err.code === 'EPERM'; } };
+  const query = "Get-CimInstance Win32_Process -Filter \"Name='llama-server.exe'\" | ForEach-Object { '{0}|{1}|{2}' -f $_.ProcessId, $_.ParentProcessId, $_.ExecutablePath }";
+  return new Promise((resolve) => {
+    execFile('powershell', ['-NoProfile', '-Command', query], { windowsHide: true, timeout: 20000 }, (err, stdout) => {
+      if (!err) {
+        for (const line of String(stdout).split(/\r?\n/)) {
+          const [pid, ppid, exe] = line.split('|');
+          if (!exe || !exe.toLowerCase().startsWith(ours) || alive(Number(ppid))) continue;
+          try { process.kill(Number(pid)); console.log(`[ollama] stopped orphaned runner ${pid}`); } catch { /* already gone */ }
+        }
+      }
+      resolve();
+    });
+  });
+}
+
 async function ensureOllamaRunning() {
   if (await ollamaReady()) {
     // Already serving — either our own instance kept from last session, or
@@ -307,6 +331,7 @@ async function ensureOllamaRunning() {
     await adoptKeptOllama();
     return true;
   }
+  await killOrphanRunners();
   const bin = findBundledOllama() || 'ollama';
   const modelsDir = getEffectiveModelsDir();
   try {
@@ -721,8 +746,6 @@ app.whenReady().then(async () => {
   voiceInput = new VoiceInput(getResourcesDir());
   voiceInput.detect();
   library = new Library(ollama, libraryStorageDir);
-  const migrated = library.backfillChunks();
-  if (migrated > 0) console.log(`[library] chunked ${migrated} doc(s) uploaded before chunking existed`);
   researchSync = new ResearchSync({ library, ollama, getRoot: getResearchRoot });
   researchSync.on('progress', (p) => win?.webContents.send('research-sync-progress', p));
 
@@ -731,6 +754,13 @@ app.whenReady().then(async () => {
   downloader.on('error', (data) => win?.webContents.send('pull-error', data));
 
   createWindow();
+  // One-time migration check for very old uploads — after the window is up,
+  // never before it: on a cold disk it used to hold the window back for up
+  // to ~30 s (2026-10-17), so a double-click looked like it did nothing.
+  setTimeout(() => {
+    const migrated = library.backfillChunks();
+    if (migrated > 0) console.log(`[library] chunked ${migrated} doc(s) uploaded before chunking existed`);
+  }, 3000);
   await ensureOllamaRunning();
   win?.webContents.send('ollama-status', { ready: await runtimeReady(), backend: getLlmBackend() });
 });
