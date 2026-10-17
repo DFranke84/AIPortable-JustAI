@@ -512,6 +512,19 @@ function getSavedWindowBounds() {
   return onScreen ? saved : { width: saved.width, height: saved.height };
 }
 
+// Saved whenever the window is resized/moved (debounced) and again right
+// before shutdown — not only from the window's 'close' event: quitting ends
+// with app.exit() (see before-quit), which never fires 'close', so the size
+// was never actually saved on a normal Exit.
+// getNormalBounds() (not getBounds()) so a maximized window still remembers
+// its restored size/position, not the maximized ones.
+function saveWindowState() {
+  if (!win || win.isDestroyed() || win.isMinimized()) return;
+  hostSettings.windowMaximized = win.isMaximized();
+  hostSettings.windowBounds = win.getNormalBounds();
+  saveHostSettings();
+}
+
 function createWindow() {
   const saved = getSavedWindowBounds();
   win = new BrowserWindow({
@@ -556,12 +569,11 @@ function createWindow() {
       win.webContents.send('close-requested');
       return;
     }
-    // getNormalBounds() (not getBounds()) so a currently-maximized window
-    // still remembers its restored size/position, not the maximized ones.
-    hostSettings.windowMaximized = win.isMaximized();
-    hostSettings.windowBounds = win.getNormalBounds();
-    saveHostSettings();
+    saveWindowState();
   });
+  let windowStateTimer = null;
+  const saveSoon = () => { clearTimeout(windowStateTimer); windowStateTimer = setTimeout(saveWindowState, 500); };
+  for (const ev of ['resize', 'move', 'maximize', 'unmaximize']) win.on(ev, saveSoon);
   win.on('closed', () => { win = null; });
 }
 
@@ -738,6 +750,7 @@ app.on('before-quit', (e) => {
   if (shuttingDown) return;
   e.preventDefault();
   shuttingDown = true;
+  saveWindowState();
   // app.exit() (hard, immediate process termination), not app.quit() (which
   // waits for Node's event loop to drain on its own). When the user chose to
   // leave models loaded, performShutdown() deliberately leaves ollamaProcess

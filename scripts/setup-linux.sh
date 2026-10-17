@@ -21,6 +21,8 @@
 #   5. Ollama          — downloads the official portable Linux build from
 #                        github.com/ollama/ollama into resources/ollama/linux/
 #                        (no system-wide install, no systemd service).
+#   5b. Kiwix          — downloads kiwix-serve (download.kiwix.org) into
+#                        resources/kiwix/linux/ — powers the chat's ZIM search.
 #   6. Data folders    — creates empty data/models and data/library.
 #   7. Models          — pulls nomic-embed-text (Library semantic search) and,
 #                        with --model, one chat model too.
@@ -294,6 +296,30 @@ EOF
   ok "Launcher wrapper resources/ollama/linux/ollama in place"
 fi
 
+# ---------------------------------------------------------------- 5b. Kiwix
+step "Setting up Kiwix (searches .zim archives from chat) — about 20 MB"
+KIWIX_DIR="$ROOT/resources/kiwix/linux"
+if [[ -x "$KIWIX_DIR/kiwix-serve" ]]; then
+  ok "kiwix-serve already present — skipping"
+else
+  case "$(uname -m)" in
+    x86_64)  KIWIX_ARCH=x86_64 ;;
+    aarch64) KIWIX_ARCH=aarch64 ;;
+    *) fail "No kiwix-tools build for $(uname -m) — get one from https://download.kiwix.org/release/kiwix-tools/" ;;
+  esac
+  mkdir -p "$KIWIX_DIR"
+  KIWIX_TMP="$(mktemp -d)"
+  # The unversioned name redirects to the newest release.
+  curl -fL --retry 3 -o "$KIWIX_TMP/kiwix.tar.gz" "https://download.kiwix.org/release/kiwix-tools/kiwix-tools_linux-$KIWIX_ARCH.tar.gz" \
+    || fail "Could not download kiwix-tools — check your internet connection and re-run."
+  tar -xzf "$KIWIX_TMP/kiwix.tar.gz" -C "$KIWIX_TMP"
+  KIWIX_BIN="$(find "$KIWIX_TMP" -type f -name kiwix-serve | head -n1)"
+  [[ -n "$KIWIX_BIN" ]] || fail "kiwix-serve was not found in the kiwix-tools archive."
+  cp "$KIWIX_BIN" "$KIWIX_DIR/kiwix-serve" && chmod +x "$KIWIX_DIR/kiwix-serve"
+  rm -rf "$KIWIX_TMP"
+  ok "kiwix-serve installed in resources/kiwix/linux"
+fi
+
 # ---------------------------------------------------------------- 6. data folders
 step "Creating empty runtime data folders"
 mkdir -p "$ROOT/data/models" "$ROOT/data/library"
@@ -401,6 +427,7 @@ else echo "    ${c_red}MISSING:${c_off} better-sqlite3 does not load inside Elec
 check "Renderer vendor assets"       "$ROOT/src/renderer/vendor/pdf.mjs"
 if [[ $SKIP_OLLAMA -eq 1 ]]; then check "Portable Ollama" "$OLLAMA_DIR/bin/ollama" optional
 else check "Portable Ollama" "$OLLAMA_DIR/bin/ollama"; fi
+check "Kiwix (ZIM search)"           "$ROOT/resources/kiwix/linux/kiwix-serve"
 check "Voice input (whisper-server)" "$ROOT/resources/whisper/linux/whisper-server" optional
 
 # Electron needs these shared libraries at runtime; report any the loader can't find.
