@@ -148,11 +148,11 @@ function getContextSize() {
   return CONTEXT_SIZE_PRESETS.includes(saved) ? saved : null;
 }
 
-// The separate Research library (E:\Research) that the AI indexes in place —
+// The separate Research library (E:\AI-Research\Research) that the AI indexes in place —
 // also a host setting, since drive letters are a property of the machine.
 // Order: the folder the user picked (if it still exists), a "Research"
-// folder beside the app folder (E:\AIPortable-JustAI -> E:\Research, so it
-// follows the drive letter), then E:\Research. null = not connected.
+// folder beside the app folder (E:\AI-Research\AIPortable -> E:\AI-Research\Research,
+// so it follows the drive letter), then the old E:\Research. null = not connected.
 function getResearchRoot() {
   const candidates = [hostSettings.researchRoot, path.join(portableRoot, '..', 'Research'), 'E:\\Research'].filter(Boolean);
   for (const c of candidates) {
