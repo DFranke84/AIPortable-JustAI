@@ -6,6 +6,14 @@ documents, and let the AI search offline Wikipedia and other reference archives 
 No account, no cloud, no telemetry. The whole app, including its models, chats and data, lives in **one folder**
 that you can move to another drive or carry on a USB stick. Runs on Windows and Linux.
 
+## What it looks like
+
+<table>
+<tr><td width="50%"><img src="docs/images/justai-chat-archives.png" alt="Archive search (🗃️): the AI searched NHS Medicines and WikEM before answering"><br><sub>Archive search (🗃️): the AI searched NHS Medicines and WikEM before answering</sub></td><td width="50%"><img src="docs/images/justai-tools-library.png" alt="Tools/Settings → Library: your documents, the Research library, archive folders"><br><sub>Tools/Settings → Library: your documents, the Research library, archive folders</sub></td></tr>
+</table>
+
+*Pictures from a demo library built from scratch with these tools (starter-pack samples, a few recipes, a Local Area for Asheville, NC).*
+
 ---
 
 ## How the apps fit together
@@ -53,6 +61,9 @@ about 3 GB for the app and Ollama, plus the AI models you choose (0.3 - 20 GB ea
 3. **Start the app:** `AIPortable-JustAI.vbs` on Windows, `./start-aiportable-justai.sh` on Linux.
 
 Step by step, all options, manual install and troubleshooting: **[SETUP.md](SETUP.md)**.
+
+
+**Testing a fresh install?** [TESTING.md](TESTING.md) is a step-by-step checklist for setting all the apps up from scratch in a test folder - no experience needed.
 
 ---
 
