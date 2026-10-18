@@ -1268,7 +1268,10 @@ function showMainView(name) {
   els.libraryView.classList.toggle('active', name === 'library');
   els.analyzeView.classList.toggle('active', name === 'analyze');
   els.translateView.classList.toggle('active', name === 'translate');
-  if (name === 'library') initLibraryBrowser();
+  // Returned so a caller that opens one document can wait for the list to
+  // finish loading first - otherwise the list would cover the document.
+  const libraryReady = name === 'library' ? initLibraryBrowser() : null;
+  return libraryReady;
 }
 function isMainViewActive(name) {
   return { library: els.libraryView, analyze: els.analyzeView, translate: els.translateView }[name].classList.contains('active');
@@ -1551,7 +1554,7 @@ function sourceLink({ id, title, kind, bookTitle, file, url }) {
   badge.textContent = kind === 'research' ? 'Research' : 'Local';
   a.append(badge, title);
   a.onclick = async () => {
-    showMainView('library');
+    await showMainView('library');
     await openBrowserDoc(id);
   };
   return a;
@@ -1610,7 +1613,7 @@ els.libraryFile.addEventListener('change', async () => {
       const canView = !!existing.external_id; // bulk-imported docs are viewable in the Library view; another of your own uploads isn't
       if (canView) {
         if (await showAppConfirm(`"${file.name}" already appears to be in the library, as "${label}". Not added. View the existing copy?`)) {
-          showMainView('library');
+          await showMainView('library');
           await openBrowserDoc(existing.id);
         }
       } else {
