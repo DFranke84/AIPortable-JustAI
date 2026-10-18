@@ -3,6 +3,8 @@
 An AI assistant that runs entirely on your own computer: chat with local AI models, ask questions about your own
 documents, and let the AI search offline Wikipedia and other reference archives while it answers.
 
+▶ **[Watch the feature tour on YouTube](https://youtu.be/AcBpQHDESII)**
+
 No account, no cloud, no telemetry. The whole app, including its models, chats and data, lives in **one folder**
 that you can move to another drive or carry on a USB stick. Runs on Windows and Linux.
 
