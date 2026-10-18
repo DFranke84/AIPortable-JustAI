@@ -151,3 +151,8 @@ move or back up the app; SETUP.md section 10 explains how to reset or remove it.
 The app's window can only reach the explicit functions in `src/main/preload.js` (`contextIsolation` on,
 `nodeIntegration` off), and a strict Content-Security-Policy is set in `index.html`. Ollama and Kiwix listen on
 `127.0.0.1` only. Mobile sync opens a network port only while you have it switched on, and has no password.
+
+## License
+
+Free to use, change and share under the [MIT License](LICENSE). Bundled third-party parts (PDF.js, marked, and
+the Ollama / Kiwix / whisper programs that setup downloads) keep their own open-source licenses.
