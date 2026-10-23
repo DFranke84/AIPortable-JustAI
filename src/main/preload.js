@@ -116,7 +116,7 @@ contextBridge.exposeInMainWorld('localAI', {
   processAttachment: (payload) => ipcRenderer.invoke('attachment:process', payload),
 
   // -- app lifecycle --------------------------------------------------------
-  quitApp: (keepLoaded) => ipcRenderer.invoke('app:quit', { keepLoaded }),
+  quitApp: (keepLoaded, remember = true) => ipcRenderer.invoke('app:quit', { keepLoaded, remember }),
   getKeepModelsLoadedPref: () => ipcRenderer.invoke('app:get-keep-loaded-pref'),
   onShutdownStatus: (cb) => on('shutdown-status', cb),
   onCloseRequested: (cb) => on('close-requested', cb),
@@ -125,6 +125,14 @@ contextBridge.exposeInMainWorld('localAI', {
   clipboardWrite: (text) => ipcRenderer.invoke('clipboard:write', text),
   getSystemInfo: () => ipcRenderer.invoke('system:info'),
   getOllamaLog: () => ipcRenderer.invoke('ollama:get-log'),
+
+  // -- check for updates ----------------------------------------------------
+  updatesState: () => ipcRenderer.invoke('updates:state'),
+  updatesCheck: () => ipcRenderer.invoke('updates:check'),
+  updatesSetWeekly: (on) => ipcRenderer.invoke('updates:set-weekly', on),
+  updatesRun: () => ipcRenderer.invoke('updates:run'),
+  updatesOpenPage: (url) => ipcRenderer.invoke('updates:open-page', url),
+  onUpdatesAvailable: (cb) => on('updates-available', cb),
 });
 
 function on(channel, cb) {

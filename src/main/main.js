@@ -16,6 +16,7 @@ const { Library } = require('./services/library');
 const { ResearchSync } = require('./services/researchSync');
 const { extractText } = require('./services/textExtract');
 const { syncModels } = require('./services/modelSync');
+const { Updates } = require('./services/updates');
 
 const IMAGE_EXT = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp']);
 const ATTACHMENT_TEXT_EXT = new Set(['.txt', '.md', '.text', '.pdf', '.docx', '.doc']);
@@ -802,6 +803,11 @@ app.whenReady().then(async () => {
     const migrated = library.backfillChunks();
     if (migrated > 0) console.log(`[library] chunked ${migrated} doc(s) uploaded before chunking existed`);
   }, 3000);
+  // Weekly update check - only when the user turned it on (see services/updates.js).
+  setTimeout(async () => {
+    const found = await updates.weeklyCheckDue();
+    if (found) win?.webContents.send('updates-available', found);
+  }, 30000);
   await ensureOllamaRunning();
   win?.webContents.send('ollama-status', { ready: await runtimeReady(), backend: getLlmBackend() });
 });
@@ -1319,11 +1325,35 @@ ipcMain.handle('attachment:process', async (e, { name, base64 }) => {
 // ---------------------------------------------------------------------------
 // IPC — app lifecycle
 // ---------------------------------------------------------------------------
-ipcMain.handle('app:quit', (e, { keepLoaded = false } = {}) => {
+ipcMain.handle('app:quit', (e, { keepLoaded = false, remember = true } = {}) => {
   exitKeepModelsLoaded = keepLoaded;
-  hostSettings.keepModelsLoadedOnExit = keepLoaded; // remembered as the checkbox's default next time
-  saveHostSettings();
+  if (remember) {
+    hostSettings.keepModelsLoadedOnExit = keepLoaded; // remembered as the checkbox's default next time
+    saveHostSettings();
+  }
   app.quit();
+});
+
+// ---------------------------------------------------------------------------
+// IPC — check for updates (Tools/Settings → System)
+// ---------------------------------------------------------------------------
+const updates = new Updates({
+  root: getPortableRoot(),
+  name: 'AIPortable-JustAI',
+  repo: 'DFranke84/AIPortable-JustAI',
+  title: 'AIPortable-JustAI',
+  launcher: path.join(getPortableRoot(), 'AIPortable-JustAI.vbs'),
+});
+ipcMain.handle('updates:state', () => updates.state());
+ipcMain.handle('updates:check', async () => {
+  try { return { ok: true, ...(await updates.check()) }; } catch (e) { return { ok: false, error: e.message, state: updates.state() }; }
+});
+ipcMain.handle('updates:set-weekly', (e, on) => { updates.setWeekly(on); return updates.state(); });
+ipcMain.handle('updates:run', () => {
+  try { updates.startUpdate(); return { ok: true }; } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('updates:open-page', (e, url) => {
+  if (/^https:\/\/github\.com\//.test(String(url))) shell.openExternal(url);
 });
 ipcMain.handle('app:get-keep-loaded-pref', () => !!hostSettings.keepModelsLoadedOnExit);
 

@@ -164,6 +164,12 @@ const els = {
 
   systemInfo: document.getElementById('system-info'),
   ollamaLogRefresh: document.getElementById('ollama-log-refresh'),
+  updateInfo: document.getElementById('update-info'),
+  updateCheck: document.getElementById('update-check'),
+  updateRun: document.getElementById('update-run'),
+  updateWeeklyRow: document.getElementById('update-weekly-row'),
+  updateWeekly: document.getElementById('update-weekly'),
+  updateHint: document.getElementById('update-hint'),
   ollamaLogView: document.getElementById('ollama-log-view'),
 };
 
@@ -1254,7 +1260,7 @@ function showTab(name) {
   if (name === 'models') { refreshBackendControl(); refreshModelsLocation(); refreshCatalogTiers(); refreshContextSizeControl(); }
   if (name === 'library') { refreshZimFolders(); refreshUploads(); populateCategorySelect(els.libraryUploadCategory, { allowNew: true }); refreshResearchStatus(); }
   if (name === 'mobile') { refreshMobileStatus(); }
-  if (name === 'system') { refreshSystemInfo(); }
+  if (name === 'system') { refreshSystemInfo(); refreshUpdateState(); }
 }
 els.tabs.forEach((t) => t.addEventListener('click', () => showTab(t.dataset.tab)));
 
@@ -2390,6 +2396,72 @@ async function refreshSystemInfo() {
     els.systemInfo.appendChild(warning);
   }
 }
+
+// ---- check for updates ------------------------------------------------------
+// With the AI Research Suite installed next to this app, its updater checks
+// and updates every piece; on its own, GitHub is asked about this app only.
+let updateResult = null;
+function escapeReplyHtml(s) { return String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+async function refreshUpdateState() {
+  const st = await window.localAI.updatesState();
+  els.updateWeeklyRow.classList.toggle('hidden', !st.suite);
+  els.updateWeekly.checked = st.weeklyCheck;
+  if (!updateResult) {
+    els.updateInfo.innerHTML = `<div class="row"><span>This app</span><span>${escapeReplyHtml(st.name)} ${escapeReplyHtml(st.version || '(version unknown)')}</span></div>`;
+    els.updateHint.textContent = st.git
+      ? 'This copy is a git checkout - update it with git pull.'
+      : (st.suite ? (st.lastCheck ? `Last checked ${new Date(st.lastCheck).toLocaleString()}.` : '') : 'Installed without the AI Research Suite, so updates are downloaded from the release page.');
+  }
+}
+
+function renderUpdateResult(r) {
+  updateResult = r;
+  els.updateInfo.innerHTML = r.components.map((c) => {
+    const ver = c.update ? `${escapeReplyHtml(c.installed || '-')} → <strong>${escapeReplyHtml(c.latest)}</strong>` : escapeReplyHtml(c.installed || c.latest || '');
+    const notes = c.update && c.notes ? `<br><span class="panel-hint">${escapeReplyHtml(c.notes)}</span>` : '';
+    return `<div class="row"><span>${escapeReplyHtml(c.title || c.name)}${notes}</span><span>${ver} · ${escapeReplyHtml(c.status)}</span></div>`;
+  }).join('');
+  const canRun = r.state.suite && !r.state.git && r.updates > 0;
+  els.updateRun.classList.toggle('hidden', !canRun);
+  const page = r.components.find((c) => c.update && c.page);
+  if (canRun) els.updateHint.textContent = 'Only program files are replaced - your chats, models, library and settings stay as they are. The app closes, updates in its own window, then starts again.';
+  else if (r.updates > 0 && page && !r.state.suite) els.updateHint.innerHTML = `A new version is out. <a href="#" id="update-page-link">Open the release page</a> to download it.`;
+  else if (r.updates > 0 && r.state.git) els.updateHint.textContent = 'This copy is a git checkout - update it with git pull.';
+  else els.updateHint.textContent = r.updates > 0 ? '' : 'Everything is up to date.';
+  const link = document.getElementById('update-page-link');
+  if (link) link.onclick = (e) => { e.preventDefault(); window.localAI.updatesOpenPage(page.page); };
+}
+
+els.updateCheck.onclick = async () => {
+  els.updateCheck.disabled = true;
+  els.updateCheck.textContent = 'Checking…';
+  try {
+    const r = await window.localAI.updatesCheck();
+    if (r.ok) renderUpdateResult(r);
+    else els.updateHint.textContent = `Couldn't check for updates: ${r.error}`;
+  } finally {
+    els.updateCheck.disabled = false;
+    els.updateCheck.textContent = 'Check for updates';
+  }
+};
+
+els.updateRun.onclick = async () => {
+  const names = updateResult.components.filter((c) => c.update).map((c) => `${c.title || c.name} ${c.latest}`).join(', ');
+  if (!(await showAppConfirm(`Install ${names}?\n\nThe app closes now, the updater runs in its own window, and the app starts again when it's done. Your chats, models and library are not touched.`))) return;
+  const res = await window.localAI.updatesRun();
+  if (!res.ok) { await showAppAlert(`Couldn't start the updater: ${res.error}`); return; }
+  els.shutdownOverlay.classList.remove('hidden');
+  await window.localAI.quitApp(false, false); // Ollama must stop too - the updater waits for this folder's programs to close
+};
+
+els.updateWeekly.onchange = () => window.localAI.updatesSetWeekly(els.updateWeekly.checked);
+
+window.localAI.onUpdatesAvailable(async (r) => {
+  const names = r.components.filter((c) => c.update).map((c) => `${c.title || c.name} ${c.latest}`).join(', ');
+  await showAppAlert(`New version available: ${names}.\n\nTools/Settings → System → Update now.`);
+  renderUpdateResult(r);
+});
 
 els.ollamaLogRefresh.onclick = async () => {
   els.ollamaLogRefresh.disabled = true;
