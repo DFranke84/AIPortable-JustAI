@@ -65,6 +65,7 @@ contextBridge.exposeInMainWorld('localAI', {
   getContextSizePresets: () => ipcRenderer.invoke('settings:context-size-presets'),
   getContextSize: () => ipcRenderer.invoke('settings:get-context-size'),
   setContextSize: (size) => ipcRenderer.invoke('settings:set-context-size', size),
+  getOllamaTuning: (model) => ipcRenderer.invoke('settings:get-ollama-tuning', model),
 
   // -- mobile sync server -----------------------------------------------
   mobileStart: () => ipcRenderer.invoke('mobile:start'),

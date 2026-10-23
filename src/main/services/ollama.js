@@ -33,6 +33,26 @@ class OllamaManager {
     this.currentModel = null;
     this.currentRequest = null; // in-flight request, so abortGeneration() can kill it
     this.onReload = null; // ({ model, from, to }) => void — set by main.js to tell the UI
+    // Measured per-model settings, both set by main.js:
+    // getTuning(model) -> { context, kvCache } | null, from the GPU tier's catalog;
+    // prepareServer(model) -> Promise, restarts our own Ollama when the model
+    // needs the other KV-cache type (a server-wide setting in Ollama).
+    this.getTuning = null;
+    this.prepareServer = null;
+    this.autoContext = () => true; // false when the user picked a fixed context size
+    this.streaming = 0; // chat streams in progress — a server restart would cut them off
+  }
+
+  // Applies the model's measured context: "Auto" uses it outright; a fixed
+  // size the user picked (already raised by the renderer for images/ZIM) is
+  // capped at it, since anything larger no longer fits fully on the GPU.
+  async tunedOptions(model, options) {
+    await this.prepareServer?.(model);
+    const tuned = this.getTuning?.(model);
+    if (!tuned?.context) return options;
+    const want = options?.num_ctx;
+    if (this.autoContext()) return { ...(options || {}), num_ctx: tuned.context };
+    return want ? { ...options, num_ctx: Math.min(want, tuned.context) } : options;
   }
 
   // Ollama reloads a model whenever a request's num_ctx differs from the one
@@ -43,6 +63,7 @@ class OllamaManager {
   // smaller num_ctx becomes the resident size. A request that needs MORE
   // still reloads, and is reported through onReload so the UI can say so.
   async fitOptions(model, options) {
+    options = await this.tunedOptions(model, options);
     let resident = null;
     try {
       resident = (await request('/api/ps')).models?.find((m) => m.name === model || m.model === model);
@@ -101,6 +122,11 @@ class OllamaManager {
   // see the num_ctx override in chat:send for why a vision request needs one.
   async chatStream({ model, messages, options }, onToken) {
     options = await this.fitOptions(model, options);
+    this.streaming++;
+    return this.streamChat(model, messages, options, onToken).finally(() => { this.streaming--; });
+  }
+
+  streamChat(model, messages, options, onToken) {
     return new Promise((resolve, reject) => {
       // keep_alive: -1 tells Ollama to keep the model resident indefinitely
       // instead of evicting it after its default 5-minute idle timer — once

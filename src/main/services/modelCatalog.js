@@ -132,6 +132,23 @@ class ModelDownloader {
     return merged;
   }
 
+  // Ollama settings measured on a card of this tier's size (see the
+  // "ollamaTuning" section of e.g. data/12K-models-catalog.json):
+  // { "model:tag": { context, kvCache } }. It may name models the tier's own
+  // list doesn't (an installed model from a smaller tier was still measured on
+  // this card). The largest selected tier that has a section wins; {} = none.
+  getOllamaTuning(selectedTiers) {
+    const tiers = selectedTiers && selectedTiers.length ? selectedTiers : TIERS.map((t) => t.tier);
+    for (const { tier } of [...TIERS].reverse()) {
+      if (!tiers.includes(tier)) continue;
+      try {
+        const raw = JSON.parse(fs.readFileSync(this.tierFilePath(tier), 'utf8'));
+        if (raw && raw.ollamaTuning && typeof raw.ollamaTuning === 'object') return raw.ollamaTuning;
+      } catch { /* missing or unparsable tier file — try the next one */ }
+    }
+    return {};
+  }
+
   // Per-tier read/parse status for the given tiers, so the Models tab can
   // show each source file's own path and flag one with a JSON typo instead
   // of silently falling back for the whole combined list.

@@ -244,6 +244,13 @@ let weSpawnedOllama = false;
 // unrelated Ollama (tray app, service, terminal) is never touched.
 let ownedOllamaPid = null;
 
+// KV-cache type the Ollama we own was started with. Ollama only takes it as a
+// server-wide environment variable (OLLAMA_KV_CACHE_TYPE), not per request,
+// while the best type differs per model (measured 2026-10-23 on a 12 GB card:
+// 8-bit lets 14B models keep 16K context fully on the GPU, 2x faster; 16-bit
+// is up to 25% faster for models that fit anyway). See prepareOllamaFor.
+let ollamaKvCache = 'f16';
+
 // Resolves true if `pid` is a live ollama process. Used to tell our own
 // kept-alive server from a previous session apart from a foreign instance.
 function isOllamaPid(pid) {
@@ -270,6 +277,7 @@ async function adoptKeptOllama() {
   if (!(await isOllamaPid(pid))) return false;
   ownedOllamaPid = pid;
   weSpawnedOllama = true;
+  ollamaKvCache = hostSettings.keptOllamaKvCache || 'f16';
   appendOllamaLog(`[AIPortable] Re-adopted Ollama (PID ${pid}) left running by the previous session — its earlier log output isn't available.\n`);
   return true;
 }
@@ -345,11 +353,16 @@ async function ensureOllamaRunning() {
     // doesn't get a surprise console window auto-allocated for it. Verified
     // this has nothing to do with whether Ollama's own log output is
     // visible in dev mode — see appendOllamaLog below for that instead.
+    // Start with the cache type the last-used model wanted, so the usual
+    // case (same model as last time) needs no restart on the first message.
+    const kvCache = hostSettings.ollamaKvCache === 'q8_0' ? 'q8_0' : 'f16';
+    const kvEnv = kvCache === 'q8_0' ? { OLLAMA_KV_CACHE_TYPE: 'q8_0', OLLAMA_FLASH_ATTENTION: '1' } : {};
     ollamaProcess = spawn(bin, ['serve'], {
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
-      env: { ...process.env, OLLAMA_MODELS: modelsDir },
+      env: { ...process.env, OLLAMA_MODELS: modelsDir, ...kvEnv },
     });
+    ollamaKvCache = kvCache;
     ollamaProcess.stdout.on('data', appendOllamaLog);
     ollamaProcess.stderr.on('data', appendOllamaLog);
     ollamaProcess.on('error', (err) => console.error('Failed to spawn Ollama:', err.message));
@@ -384,6 +397,30 @@ async function restartManagedOllama(message) {
   const ready = await ensureOllamaRunning();
   win?.webContents.send('ollama-status', { ready });
   return { restarted: true, ready };
+}
+
+// Measured Ollama settings for `model` on this machine's GPU size
+// ({ context, kvCache } from the selected tier's catalog), or null.
+function getOllamaTuning(model) {
+  return downloader.getOllamaTuning(getSelectedCatalogTiers())[model] || null;
+}
+
+// Called before every chat/image/title/load request (see fitOptions in
+// ollama.js): when the model runs best with the other KV-cache type, restart
+// our own Ollama with it. Skipped for an Ollama we don't own (can't change
+// its settings) and while a reply is streaming (a restart would cut it off —
+// the request then just runs with the current type).
+let kvSwitch = null;
+async function prepareOllamaFor(model) {
+  if (kvSwitch) await kvSwitch;
+  const want = getOllamaTuning(model)?.kvCache === 'q8_0' ? 'q8_0' : 'f16';
+  if (!weSpawnedOllama || want === ollamaKvCache || ollama.streaming > 0) return;
+  hostSettings.ollamaKvCache = want;
+  saveHostSettings();
+  const label = want === 'q8_0' ? '8-bit' : '16-bit';
+  kvSwitch = restartManagedOllama(`Restarting Ollama with the ${label} context cache that suits ${model}…`)
+    .finally(() => { kvSwitch = null; });
+  await kvSwitch;
 }
 
 // Kills only the Ollama server we own (spawned or re-adopted), by PID. On
@@ -486,6 +523,7 @@ async function performShutdown(keepModelsLoaded) {
     // as ours instead of mistaking it for a foreign instance.
     if (weSpawnedOllama && ownedOllamaPid) {
       hostSettings.keptOllamaPid = ownedOllamaPid;
+      hostSettings.keptOllamaKvCache = ollamaKvCache;
       saveHostSettings();
     }
     mobileServer?.stop();
@@ -735,6 +773,9 @@ app.whenReady().then(async () => {
   // A request needing a bigger context than the model is loaded with makes
   // Ollama reload it — tell the UI so the wait isn't a mystery (see fitOptions).
   ollama.onReload = (info) => win?.webContents.send('model-reload', info);
+  ollama.getTuning = getOllamaTuning;
+  ollama.prepareServer = prepareOllamaFor;
+  ollama.autoContext = () => getContextSize() === null;
   lmstudio = new LMStudioManager({ getAutoLoad: getLmstudioAutoLoad, getThinking: getLmstudioThinking });
   downloader = new ModelDownloader(ollama, dataDir);
   // The phone server only needs the current model + chatStream, routed to
@@ -952,6 +993,7 @@ ipcMain.handle('catalog:set-selected-tiers', (e, tiers) => {
 
 ipcMain.handle('settings:context-size-presets', () => CONTEXT_SIZE_PRESETS);
 ipcMain.handle('settings:get-context-size', () => getContextSize());
+ipcMain.handle('settings:get-ollama-tuning', (e, model) => getOllamaTuning(model));
 // A loaded Ollama model keeps the context it was loaded with until it needs
 // a bigger one (see fitOptions in ollama.js), so a new setting wouldn't take
 // effect for it. If the chat model is loaded at a different size, unload it:
@@ -966,7 +1008,11 @@ ipcMain.handle('settings:set-context-size', async (e, size) => {
   const model = ollama.getCurrentModel();
   if (getLlmBackend() === 'ollama' && model) {
     const resident = (await ollama.getRunningModels()).find((m) => m.name === model);
-    if (resident && resident.context_length !== chosen) {
+    // The size requests will actually use: the model's measured context for
+    // Auto, a fixed choice capped at it (see tunedOptions in ollama.js).
+    const tuned = getOllamaTuning(model)?.context;
+    const target = chosen === null ? (tuned ?? null) : (tuned ? Math.min(chosen, tuned) : chosen);
+    if (resident && resident.context_length !== target) {
       await ollama.unloadModel(model);
       unloaded = model;
     }
