@@ -394,6 +394,17 @@
 
         <section id="tab-system" class="tab-panel">
           <div id="system-info" class="system-info">Loading…</div>
+          <h4 class="panel-subhead">Updates</h4>
+          <div id="update-info" class="system-info"></div>
+          <div class="search-row">
+            <button id="update-check" class="pull-btn">Check for updates</button>
+            <button id="update-run" class="btn-send hidden">Update now</button>
+          </div>
+          <label id="update-weekly-row" class="app-modal-checkbox-row hidden">
+            <input type="checkbox" id="update-weekly" />
+            <span>Check once a week when online (only github.com is contacted)</span>
+          </label>
+          <p id="update-hint" class="panel-hint"></p>
           <h4 class="panel-subhead">Ollama log</h4>
           <p class="panel-hint">
             Ollama runs in the background with no console window of its own — this is a
