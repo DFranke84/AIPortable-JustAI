@@ -18,3 +18,6 @@ data/*
 *.mp4
 resources/kiwix/*/*
 !resources/kiwix/*/PLACE_BINARY_HERE.txt
+
+# Written by the suite updater (what version is installed)
+release-manifest.json
