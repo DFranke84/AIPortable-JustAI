@@ -45,8 +45,8 @@ function getJson(url) {
 }
 
 function firstLine(text) {
-  const line = String(text || '').split(/\r?\n/).map((l) => l.trim()).find((l) => l && !l.startsWith('#')) || '';
-  return line.replace(/^[-*]\s*/, '').slice(0, 110);
+  const line = String(text || '').replace(/﻿/g, '').split(/\r?\n/).map((l) => l.trim()).find((l) => l && !l.startsWith('#')) || '';
+  return line.replace(/^[-*]\s+/, '').replace(/\*\*|__|`/g, '').slice(0, 110); // plain text: no bullet or **bold** markers
 }
 
 class Updates {
