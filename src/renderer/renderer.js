@@ -1181,7 +1181,10 @@ async function modelResidency() {
     const running = await window.localAI.getRunningModels();
     const m = running.find((r) => r.name === state.model);
     if (!m) return 'idle';
-    const want = chatNumCtx();
+    let want = chatNumCtx();
+    // Requests are sized to the model's tested context (see tunedOptions in ollama.js)
+    const tuned = state.backend === 'ollama' ? (await window.localAI.getOllamaTuning(state.model))?.context : null;
+    if (tuned) want = state.contextSize === null ? tuned : Math.min(want || tuned, tuned);
     if (state.backend === 'ollama' && want && m.context_length && m.context_length < want) return 'resize';
     return 'loaded';
   } catch {
@@ -1344,7 +1347,9 @@ async function refreshContextSizeControl() {
     btn.type = 'button';
     btn.className = 'tier-btn' + (selected === opt.value ? ' active' : '');
     btn.textContent = opt.label;
-    btn.title = opt.value === null ? "Let Ollama size the context automatically" : `Use at least ${opt.value.toLocaleString()} tokens of context for every message`;
+    btn.title = opt.value === null
+      ? "Use each model's tested best context for this GPU size (Ollama decides for untested models)"
+      : `Use at least ${opt.value.toLocaleString()} tokens of context for every message (Ollama models: capped at the tested size that fits the GPU)`;
     btn.onclick = async () => {
       const res = await window.localAI.setContextSize(opt.value);
       state.contextSize = res.size;
@@ -1352,11 +1357,23 @@ async function refreshContextSizeControl() {
       btn.classList.add('active');
       els.contextSizeNote.textContent = res.unloaded
         ? `${res.unloaded} was unloaded so the new size takes effect — it loads again with your next message (or click Load model).`
-        : '';
+        : await tuningNote();
       refreshModelLoadState();
     };
     els.contextSizeList.appendChild(btn);
   }
+  els.contextSizeNote.textContent = await tuningNote();
+}
+
+// One line under the context buttons saying what the selected Ollama model
+// will actually use, so the measured settings aren't invisible.
+async function tuningNote() {
+  if (state.backend !== 'ollama' || !state.model) return '';
+  const t = await window.localAI.getOllamaTuning(state.model);
+  if (!t?.context) return `${state.model}: no tested settings for this GPU size — Ollama decides.`;
+  const ctx = state.contextSize === null ? t.context : Math.min(state.contextSize, t.context);
+  const cache = t.kvCache === 'q8_0' ? '8-bit' : '16-bit';
+  return `${state.model}: ${ctxLabel(ctx)} context, ${cache} cache (tested best fit: ${ctxLabel(t.context)}).`;
 }
 
 // Chat runtime picker (Ollama / LM Studio) plus LM Studio's options and live

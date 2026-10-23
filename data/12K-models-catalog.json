@@ -64,5 +64,19 @@
       "category": "Survival",
       "description": "No 14B-class Dolphin exists, so this is the same refusal-free 8B pick as the 8GB tier, reused here because it fits a 12GB card with room to spare. Trades knowledge breadth for actually answering — use this one instead of Ranger Pro when the question is something a safety-tuned model would decline (improvised first aid, defensive tactics, off-grid chemistry)"
     }
+  },
+  "ollamaTuningInfo": "Measured 2026-10-23 on an RTX 3060 12 GB (E:\\AI_Programs\\BenchMark, Ollama 0.34): context = largest of 4K/8K/16K/32K that stays 100% on the GPU with the context ~90% full; kvCache = the faster cache type at that size. Context 'Auto' uses these; a fixed size is capped at them. Models not listed: Ollama decides.",
+  "ollamaTuning": {
+    "qwen3.5:9b": { "context": 32768, "kvCache": "q8_0" },
+    "qwen3-vl:8b": { "context": 32768, "kvCache": "q8_0" },
+    "deepseek-r1:7b": { "context": 32768, "kvCache": "f16" },
+    "deepseek-r1:14b": { "context": 16384, "kvCache": "q8_0" },
+    "qwen2.5-coder:7b": { "context": 32768, "kvCache": "f16" },
+    "qwen2.5-coder:14b": { "context": 16384, "kvCache": "q8_0" },
+    "qwen2.5:14b": { "context": 16384, "kvCache": "q8_0" },
+    "mistral-nemo:12b": { "context": 32768, "kvCache": "q8_0" },
+    "hf.co/bartowski/Dolphin3.0-Llama3.1-8B-GGUF:q4_K_M": { "context": 32768, "kvCache": "f16" },
+    "fluffy/l3-8b-stheno-v3.2:q4_K_M": { "context": 8192, "kvCache": "f16" },
+    "mannix/llama3.1-8b-abliterated:q5_K_M": { "context": 32768, "kvCache": "f16" }
   }
 }
