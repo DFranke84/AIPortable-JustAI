@@ -68,12 +68,83 @@ function Fail($msg) {
   exit 1
 }
 
+# Save-Download: survives a bad connection. The partial file (<dest>.part) is kept, and a retry - or
+# running setup again - carries on from the same byte (HTTP Range; If-Range makes a file that changed
+# on the server start over). A stalled transfer is retried with growing waits. Optional SHA-256 check.
+# (The same function is in AIPortable, AIPortable-JustAI and AI-Research-Suite - keep them alike.)
+function Save-Download([string]$url, [string]$dest, [string]$sha256 = '', [int]$tries = 6) {
+  $part = "$dest.part"; $info = "$dest.part.info"
+  $etag = ''
+  if (Test-Path -LiteralPath $part) {
+    $saved = if (Test-Path -LiteralPath $info) { Get-Content -LiteralPath $info -Raw } else { '' }
+    if ($saved -notmatch [regex]::Escape("url=$url")) { Remove-Item -LiteralPath $part -Force }   # left from another file
+    elseif ($saved -match 'etag=(.+)') { $etag = $Matches[1].Trim() }
+  }
+  $mb = { param($b) if ($b -ge 1GB) { '{0:N1} GB' -f ($b / 1GB) } else { '{0:N0} MB' -f ($b / 1MB) } }
+  for ($try = 1; $try -le $tries; $try++) {
+    $have = if (Test-Path -LiteralPath $part) { (Get-Item -LiteralPath $part).Length } else { 0 }
+    $total = -1
+    try {
+      $req = [Net.HttpWebRequest]::Create($url)
+      $req.UserAgent = 'AI-Research-Suite-Setup'
+      $req.Timeout = 30000; $req.ReadWriteTimeout = 60000
+      if ($have -gt 0) {
+        $req.AddRange([long]$have)
+        if ($etag) { $req.Headers['If-Range'] = $etag }
+        Write-Host ("    continuing from {0}" -f (& $mb $have))
+      }
+      $resp = $req.GetResponse()
+      try {
+        if ($have -gt 0 -and [int]$resp.StatusCode -ne 206) { $have = 0 }   # the whole file came back: start over
+        if ($resp.ContentLength -ge 0) { $total = $resp.ContentLength + $have }
+        $tag = "$($resp.Headers['ETag'])"
+        if ($tag -and $tag -notmatch '^W/') { $etag = $tag } else { $etag = '' }
+        [IO.File]::WriteAllText($info, "url=$url`r`netag=$etag`r`n")
+        $mode = if ($have -gt 0) { [IO.FileMode]::Append } else { [IO.FileMode]::Create }
+        $out = [IO.File]::Open($part, $mode, [IO.FileAccess]::Write)
+        try {
+          $in = $resp.GetResponseStream()
+          $buf = New-Object byte[] (1MB)
+          $done = $have; $shown = [DateTime]::Now
+          while (($n = $in.Read($buf, 0, $buf.Length)) -gt 0) {
+            $out.Write($buf, 0, $n); $done += $n
+            if (([DateTime]::Now - $shown).TotalSeconds -ge 5) {
+              $shown = [DateTime]::Now
+              Write-Host -NoNewline ("`r    {0} of {1}      " -f (& $mb $done), $(if ($total -gt 0) { & $mb $total } else { '?' }))
+            }
+          }
+        } finally { $out.Close() }
+      } finally { $resp.Close() }
+      $got = (Get-Item -LiteralPath $part).Length
+      if ($total -gt 0 -and $got -lt $total) { throw "the connection closed at $(& $mb $got) of $(& $mb $total)" }
+      Write-Host ''
+      if ($sha256 -and (Get-FileHash -LiteralPath $part -Algorithm SHA256).Hash -ne $sha256.ToUpper()) {
+        Remove-Item -LiteralPath $part, $info -Force
+        throw 'the download is damaged (checksum does not match) - it will start again'
+      }
+      Move-Item -LiteralPath $part -Destination $dest -Force
+      Remove-Item -LiteralPath $info -Force -ErrorAction SilentlyContinue
+      return
+    } catch {
+      $msg = $_.Exception.Message
+      $resp416 = $_.Exception.InnerException.Response
+      if (-not $resp416) { $resp416 = $_.Exception.Response }
+      if ($resp416 -and [int]$resp416.StatusCode -eq 416) { Remove-Item -LiteralPath $part -Force -ErrorAction SilentlyContinue }   # the kept part no longer fits
+      Write-Host ''
+      if ($try -ge $tries) { throw "$msg (tried $tries times; the part already downloaded is kept - run setup again to continue)" }
+      $wait = 10 * $try
+      Write-Host "    connection problem ($msg) - trying again in $wait s" -ForegroundColor Yellow
+      Start-Sleep -Seconds $wait
+    }
+  }
+}
+
 function Download($url, $dest) {
   Write-Host "    Downloading $url"
   try {
-    Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing -Headers @{ 'User-Agent' = "$AppName-setup" }
+    Save-Download $url $dest
   } catch {
-    Fail "Could not download $url`n       $($_.Exception.Message)`n       Check your internet connection (and any proxy/firewall) and re-run."
+    Fail "Could not download $url`n       $($_.Exception.Message)`n       Check your internet connection (and any proxy/firewall) and re-run - it continues where it stopped."
   }
 }
 
